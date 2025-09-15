@@ -1,0 +1,70 @@
+<!-- templates/map_viewer.html -->
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-3">Combined Route Map</h3>
+
+{% if error %}
+  <div class="alert alert-warning">{{ error }}</div>
+{% elif not filename %}
+  <div class="alert alert-secondary">No file selected.</div>
+{% else %}
+  <p class="text-muted">
+    Viewing <code>{{ filename }}</code>
+  </p>
+  <div id="map" style="height: 70vh; width: 100%; border-radius: 12px;"></div>
+{% endif %}
+
+<a class="btn btn-outline-secondary mt-3" href="{{ url_for('activity_combiner') }}">
+  ← Back to Activity Combiner
+</a>
+
+{% if filename %}
+  <!-- Leaflet CSS/JS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <!-- Leaflet-GPX plugin (loads GPX directly in the browser) -->
+  <script src="https://unpkg.com/leaflet-gpx@1.7.0/dist/leaflet-gpx.min.js"></script>
+
+  <script>
+  (function () {
+    const gpxUrl = {{ gpx_url|tojson }};
+    const map = L.map('map');
+    // Show a world view immediately so the user never sees a blank gray box
+    map.setView([0, 0], 2);
+
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    new L.GPX(gpxUrl, {
+      async: true,
+      parseElements: ['track', 'route', 'waypoint'],   // <-- important
+      marker_options: {
+        startIconUrl: 'https://unpkg.com/leaflet-gpx@1.7.0/pin-icon-start.png',
+        endIconUrl:   'https://unpkg.com/leaflet-gpx@1.7.0/pin-icon-end.png',
+        shadowUrl:    'https://unpkg.com/leaflet-gpx@1.7.0/pin-shadow.png'
+      },
+      polyline_options: { weight: 4 }
+    })
+    .on('loaded', e => map.fitBounds(e.target.getBounds(), { padding: [20, 20] }))
+    .on('error', e => {
+      console.error('GPX load error:', e);
+      alert('Could not parse the GPX file.');
+    })
+    .addTo(map);
+  })();
+</script>
+
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %} {% block content %}
+<h3 class="mb-3">Download YouTube Video</h3>
+
+<p class="text-muted">
+  Paste a YouTube link, choose a name, and we’ll download it. The file will also
+  be saved under <strong>Downloads → YouTube</strong> for later access.
+</p>
+
+<form method="post" id="ytdForm">
+  <div class="mb-3">
+    <label for="video_url" class="form-label">YouTube URL</label>
+    <input
+      type="url"
+      class="form-control"
+      id="video_url"
+      name="video_url"
+      placeholder="https://www.youtube.com/watch?v=..."
+      required
+    />
+  </div>
+
+  <div class="mb-3">
+    <label for="output_name" class="form-label">Output file name</label>
+    <input
+      type="text"
+      class="form-control"
+      id="output_name"
+      name="output_name"
+      placeholder="my_video.mp4"
+      required
+    />
+    <div class="form-text">
+      Leave off the extension if you want—we’ll add <code>.mp4</code> or
+      <code>.m4a</code> for you.
+    </div>
+  </div>
+
+  <div class="mb-3">
+    <label for="format" class="form-label">Format</label>
+    <select class="form-select" id="format" name="format">
+      <option value="mp4" selected>MP4 (video)</option>
+      <option value="m4a">M4A (audio-only)</option>
+    </select>
+  </div>
+
+  <button class="btn btn-primary" type="submit">Download Video</button>
+</form>
+
+<hr class="my-4" />
+<div class="small text-muted">
+  Please download only content you have rights to. Many platforms restrict
+  downloading; respect their Terms of Service and copyright.
+</div>
+{% endblock %}

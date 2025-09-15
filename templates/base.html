@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tools</title>
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+    />
+
+    <style>
+      body {
+        min-height: 100vh;
+      }
+      .sidebar {
+        width: 280px;
+        border-right: 1px solid #e5e5e5;
+        color: #000;
+      }
+      .sidebar a {
+        color: #000 !important;
+      }
+      .sidebar .nav-link {
+        color: #000 !important;
+        border-radius: 0.4rem;
+        transition: background-color 0.2s, color 0.2s;
+      }
+      .sidebar .nav-link:hover {
+        background-color: #f0f0f0;
+        color: #000 !important;
+      }
+      .sidebar .nav-link.active {
+        background-color: #0d6efd; /* Bootstrap primary blue, or your brand color */
+        color: #fff !important; /* white text when active */
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.3px;
+      }
+      .content-area {
+        flex: 1;
+      }
+      .file-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+      }
+      .btn {
+        border-radius: 0.4rem !important;
+        transition: all 0.2s ease-in-out;
+      }
+      .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 0.4rem 0.9rem rgba(0, 0, 0, 0.12);
+      }
+      .action-row {
+        display: flex;
+        gap: 0.5rem; /* equal spacing between buttons */
+        width: 100%;
+      }
+      .action-row .btn-mini {
+        flex: 1 1 0;
+        min-width: 60px; /* ensures icons look centered */
+        text-align: center;
+        overflow: hidden;
+        white-space: nowrap;
+        transition: flex-basis 0.2s ease, flex-grow 0.2s ease,
+          background-color 0.2s ease, box-shadow 0.2s ease;
+        border-radius: 0.4rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .action-row:hover .btn-mini {
+        flex: 1 1 0;
+      }
+      .action-row .btn-mini:hover {
+        flex: 2 1 0;
+        background-color: rgba(0, 0, 0, 0.1); /* slightly darker background */
+      }
+      .btn-mini .label {
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        transition: max-width 0.2s ease, opacity 0.15s ease;
+        white-space: nowrap;
+      }
+      .btn-mini:hover .label {
+        max-width: 120px;
+        opacity: 1;
+      }
+      .btn-mini:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 0.4rem 0.9rem rgba(0, 0, 0, 0.12);
+      }
+    </style>
+  </head>
+  <body class="d-flex">
+    <aside
+      class="sidebar p-3 d-flex flex-column"
+      style="width: 280px; border-right: 1px solid #e5e5e5; min-height: 100vh"
+    >
+      <!-- Top brand -->
+      <a href="{{ url_for('landing') }}" class="text-decoration-none mb-3">
+        <h5 class="brand mb-0">Tools</h5>
+      </a>
+
+      <!-- Primary nav -->
+      <ul class="nav nav-pills flex-column gap-1">
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/combine') else '' }}"
+            href="{{ url_for('combine') }}"
+          >
+            Combine Images
+          </a>
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/youtube') else '' }}"
+            href="{{ url_for('youtube') }}"
+          >
+            YouTube Video Download
+          </a>
+        </li>
+       </ul>
+
+      <!-- This spacer pushes the Library to the bottom -->
+      <div class="flex-grow-1"></div>
+
+      <!-- Library at the bottom -->
+      <div class="mt-auto">
+        <div class="text-uppercase text-muted small mb-2">Library</div>
+        <ul class="nav nav-pills flex-column gap-1">
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/uploads') else '' }}"
+              href="{{ url_for('uploads_index') }}"
+            >
+              Uploads
+            </a>
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/downloads') else '' }}"
+              href="{{ url_for('downloads_index') }}"
+            >
+              Downloads
+            </a>
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/landing') else '' }}"
+              href="{{ url_for('landing') }}"
+            >
+              Go Back
+            </a>
+          </li>
+        </ul>
+        <div class="small text-muted mt-3">
+          © <span id="year"></span> evryquiktool
+        </div>
+      </div>
+    </aside>
+
+    <main class="content-area p-4">
+      {% with messages = get_flashed_messages(with_categories=true) %} {% if
+      messages %}
+      <div class="container mt-3">
+        {% for category, message in messages %}
+        <div
+          class="alert alert-{{ category if category in ['primary','secondary','success','danger','warning','info','light','dark'] else 'info' }} alert-dismissible fade show"
+          role="alert"
+        >
+          {{ message }}
+          <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="alert"
+            aria-label="Close"
+          ></button>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %} {% endwith %} {% block content %}{% endblock %}
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='custom.js') }}"></script>
+    <script>
+      document.getElementById("year").textContent = new Date().getFullYear();
+    </script>
+    <script>
+      // Auto-dismiss alerts after 4 seconds
+      setTimeout(() => {
+        document.querySelectorAll(".alert").forEach((el) => {
+          const bsAlert = bootstrap.Alert.getOrCreateInstance(el);
+          bsAlert.close();
+        });
+      }, 4000);
+    </script>
+  </body>
+</html>
