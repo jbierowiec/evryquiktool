@@ -1,3 +1,6 @@
 Flask==3.0.3
 Werkzeug==3.0.3
 Pillow==10.4.0
+gunicorn==22.0.0
+gpxpy==1.6.2
+fitparse==1.2.0
