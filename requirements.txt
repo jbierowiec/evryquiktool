@@ -1,9 +1,8 @@
-Flask==3.0.3
-Werkzeug==3.0.3
-Pillow==10.4.0
-gunicorn==22.0.0
-gpxpy==1.6.2
-fitparse==1.2.0
-moveipy==2.2.1
-yt-dlp==2025.9.5
-imageio-ffmpeg==0.6.0
+Flask>=3.0,<4
+gunicorn>=22.0
+Pillow>=10.0
+gpxpy>=1.6
+fitparse>=1.2
+moviepy>=1.0.3
+yt-dlp>=2024.7
+imageio-ffmpeg>=0.6
