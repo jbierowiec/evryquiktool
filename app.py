@@ -31,6 +31,81 @@ except Exception:
 def has_ffmpeg() -> bool:
     return bool(sh_which("ffmpeg") or os.environ.get("IMAGEIO_FFMPEG_EXE"))
 
+# --- ffmpeg detection & setup ---
+def _discover_ffmpeg_exe() -> str | None:
+    """
+    Return an absolute path to an ffmpeg executable if available.
+    Tries system ffmpeg, then imageio-ffmpeg's bundled binary.
+    """
+    # System ffmpeg in PATH?
+    p = sh_which("ffmpeg")
+    if p:
+        return p
+    # Bundled ffmpeg from imageio-ffmpeg?
+    try:
+        import imageio_ffmpeg as _iioff
+        return _iioff.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+FFMPEG_EXE = _discover_ffmpeg_exe()
+if FFMPEG_EXE:
+    # help libraries that read this env var
+    os.environ.setdefault("IMAGEIO_FFMPEG_EXE", FFMPEG_EXE)
+
+def has_ffmpeg() -> bool:
+    """Actually run `ffmpeg -version` to be sure."""
+    if not FFMPEG_EXE:
+        return False
+    try:
+        out = subprocess.run(
+            [FFMPEG_EXE, "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+        )
+        return out.returncode == 0
+    except Exception:
+        return False
+
+def _yt_opts(base_out_no_ext: str, as_audio: bool) -> dict:
+    """
+    Build yt-dlp options. base_out_no_ext should be a path without extension.
+    """
+    opts = {
+        "outtmpl": base_out_no_ext + ".%(ext)s",
+        "noplaylist": True,
+        "quiet": True,
+        "merge_output_format": "mp4" if not as_audio else "mp3",
+        "format": "bv*[ext=mp4]+ba[ext=mp3]/b[ext=mp4]/best",
+        # prefer ffmpeg & tell yt-dlp exactly where it is
+        "prefer_ffmpeg": True,
+    }
+    if FFMPEG_EXE:
+        # yt-dlp accepts a dir OR a full path; both work.
+        opts["ffmpeg_location"] = os.path.dirname(FFMPEG_EXE) \
+                                  if os.path.sep in FFMPEG_EXE else FFMPEG_EXE
+    if as_audio:
+        opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+        }]
+    return opts
+
+def download_youtube(url: str, out_name: str = "my_video.mp4", as_audio=False) -> Path:
+    if yt_dlp is None:
+        raise RuntimeError("yt-dlp not installed")
+    if not has_ffmpeg():
+        raise RuntimeError("ffmpeg not available on server")
+    out_path = DOWNLOAD_DIR / out_name
+    base = str(out_path.with_suffix(""))
+    with yt_dlp.YoutubeDL(_yt_opts(base, as_audio)) as ydl:
+        ydl.download([url])
+    # find the actual produced file if extension differs
+    produced = out_path if out_path.exists() else next(DOWNLOAD_DIR.glob(out_path.stem + ".*"))
+    return produced
+
+
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = "dev-secret-key"  # replace for production
 
