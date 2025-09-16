@@ -33,15 +33,10 @@ def has_ffmpeg() -> bool:
 
 # --- ffmpeg detection & setup ---
 def _discover_ffmpeg_exe() -> str | None:
-    """
-    Return an absolute path to an ffmpeg executable if available.
-    Tries system ffmpeg, then imageio-ffmpeg's bundled binary.
-    """
-    # System ffmpeg in PATH?
-    p = sh_which("ffmpeg")
+    from shutil import which as _which
+    p = _which("ffmpeg")
     if p:
         return p
-    # Bundled ffmpeg from imageio-ffmpeg?
     try:
         import imageio_ffmpeg as _iioff
         return _iioff.get_ffmpeg_exe()
@@ -50,23 +45,18 @@ def _discover_ffmpeg_exe() -> str | None:
 
 FFMPEG_EXE = _discover_ffmpeg_exe()
 if FFMPEG_EXE:
-    # help libraries that read this env var
     os.environ.setdefault("IMAGEIO_FFMPEG_EXE", FFMPEG_EXE)
 
 def has_ffmpeg() -> bool:
-    """Actually run `ffmpeg -version` to be sure."""
     if not FFMPEG_EXE:
         return False
     try:
-        out = subprocess.run(
-            [FFMPEG_EXE, "-version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=3,
-        )
-        return out.returncode == 0
+        r = subprocess.run([FFMPEG_EXE, "-version"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
+        return r.returncode == 0
     except Exception:
         return False
+
 
 def _yt_opts(base_out_no_ext: str, as_audio: bool) -> dict:
     """
