@@ -1,23 +1,18 @@
 from __future__ import annotations
+
 import os
 import subprocess
 import shutil as _shutil
 from pathlib import Path
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional, List
 from shutil import which as sh_which
+
 from werkzeug.utils import secure_filename
 from PIL import Image
-
 from flask import (
-    Flask,
-    render_template,
-    request,
-    redirect,
-    url_for,
-    send_from_directory,
-    send_file,
-    flash,
+    Flask, render_template, request, redirect, url_for,
+    send_from_directory, send_file, flash,
 )
 
 # Optional dependency for YouTube
@@ -26,6 +21,15 @@ try:
 except Exception:
     yt_dlp = None
 
+# Make imageio-ffmpeg's bundled ffmpeg visible (works on Railway too)
+try:
+    import imageio_ffmpeg as _iioff
+    os.environ.setdefault("IMAGEIO_FFMPEG_EXE", _iioff.get_ffmpeg_exe())
+except Exception:
+    pass
+
+def has_ffmpeg() -> bool:
+    return bool(sh_which("ffmpeg") or os.environ.get("IMAGEIO_FFMPEG_EXE"))
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = "dev-secret-key"  # replace for production
