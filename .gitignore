@@ -1,12 +1,36 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.DS_Store
+*.py[cod]
+*$py.class
+
+# Virtual environments
 .venv/
 venv/
-.env
-.env.*
-uploads/
+ENV/
+env/
+*.env
+
+# Distribution / packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.DS_Store
+
+# Local data
 downloads/
-data/
+uploads/
+
+# Python dotenv files (if you use them for secrets)
+.env.local
+.env.production
+.env.development

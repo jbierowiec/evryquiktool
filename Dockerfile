@@ -1,17 +1,23 @@
 FROM python:3.12-slim
 
-# 1) System deps (ffmpeg)
+# System dependencies
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
-# 2) App deps
+# Set work directory
 WORKDIR /app
+
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3) App code
+# Copy app source
 COPY . .
 
+# Ensure logs are flushed
 ENV PYTHONUNBUFFERED=1
-CMD ["gunicorn","app:app","--bind","0.0.0.0:${PORT}","--workers","2","--threads","4","--timeout","120"]
+ENV PORT=8080
+
+# Start Gunicorn; shell form so $PORT expands on Railway
+CMD sh -c 'gunicorn app:app --bind 0.0.0.0:${PORT:-8080} --workers 2 --threads 4 --timeout 120'
