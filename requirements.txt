@@ -6,4 +6,4 @@ gpxpy==1.6.2
 fitparse==1.2.0
 moveipy==2.2.1
 yt-dlp==2025.9.5
-imageio-ffmpeg=0.6.0
+imageio-ffmpeg==0.6.0
