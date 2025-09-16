@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import subprocess
 import shutil as _shutil
@@ -251,7 +252,7 @@ def _has_video_stream(path: Path) -> bool:
 
 @app.route("/youtube", methods=["GET", "POST"])
 def youtube():
-    """Download a YouTube URL as MP4 (video) or M4A (audio-only) and auto-send to browser."""
+    """Download a YouTube URL as MP4 (video) or MP3 (audio-only) and auto-send to browser."""
     if request.method == "GET":
         return render_template("youtube.html")
 
@@ -281,18 +282,18 @@ def youtube():
     out_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(out_dir / f"{final_base}.%(ext)s")
 
-    # ---------- AUDIO ONLY (M4A) ----------
-    if fmt == "m4a":
+    # ---------- AUDIO ONLY (MP3) ----------
+    if fmt == "mp3":
         ydl_opts = {
             "outtmpl": outtmpl,
             "quiet": True,
             "noprogress": True,
             "format": "bestaudio/best",
             "postprocessors": [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "0"}
+                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"}
             ],
         }
-        expected = out_dir / f"{final_base}.m4a"
+        expected = out_dir / f"{final_base}.mp3"
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_url])
