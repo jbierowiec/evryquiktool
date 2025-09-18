@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">PDF Decrypter</h3>
+  <p class="text-muted">
+    Upload an encrypted (password-protected) PDF and provide the password.
+    We'll decrypt it (if the password is correct) and return a lock-free PDF for download.
+  </p>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if message %}
+    <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" id="pdfDecryptForm" class="mb-3">
+    <div class="mb-3">
+      <label class="form-label">Encrypted PDF</label>
+      <input class="form-control" type="file" name="pdf_file" accept="application/pdf" required>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Password</label>
+      <input class="form-control" type="password" name="password" placeholder="Enter password used to open the PDF" required>
+      <div class="form-text">We will not store the file or password permanently. Files processed in memory.</div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Output filename (optional)</label>
+      <input class="form-control" type="text" name="output_name" placeholder="decrypted.pdf">
+      <div class="form-text">If omitted, we'll return <code>decrypted_<originalname></code>.</div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Decrypt & Download</button>
+  </form>
+
+  <hr>
+
+  <h6>Notes & limitations</h6>
+  <ul>
+    <li>Supported: PDF files encrypted with user/open password. Owner-only protections may vary.</li>
+    <li>Files are processed in memory — large PDFs (many tens of MB) may hit memory limits.</li>
+    <li>If your environment lacks <code>pikepdf</code>, the app will try <code>PyPDF2</code> instead.</li>
+    <li>Do not upload PDFs you don't have permission to modify or distribute.</li>
+  </ul>
+</div>
+{% endblock %}

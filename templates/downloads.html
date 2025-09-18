@@ -1,6 +1,13 @@
 {% extends "base.html" %} {% block content %}
 <h3 class="mb-3">
-  Downloads{% if tool %} — {{ tool|replace('_',' ')|title }}{% endif %}
+  Downloads
+  {% if tool %}
+    {% if tool == "pdf_decrypter" %}
+      — PDF Decrypter
+    {% else %}
+      — {{ tool|replace("_", " ")|title }}
+    {% endif %}
+  {% endif %}
 </h3>
 
 {% if not tool %}
@@ -12,11 +19,11 @@
         <p class="text-muted mb-3">Screenshots you downloaded.</p>
         <div class="mt-auto d-flex align-items-center justify-content-between">
           <span class="badge text-bg-secondary"
-            >{{ counts.combine }} files</span
+            >{{ counts.image_combiner }} files</span
           >
           <a
             class="btn btn-primary btn-sm"
-            href="{{ url_for('downloads_tool', tool='combine') }}"
+            href="{{ url_for('downloads_tool', tool='image_combiner') }}"
             >Open</a
           >
         </div>
@@ -28,14 +35,33 @@
     <div class="card tool-card h-100">
       <div class="card-body d-flex flex-column">
         <h5 class="card-title">YouTube Downloader</h5>
-        <p class="text-muted mb-3">Any files staged from YouTube.</p>
+        <p class="text-muted mb-3">Any files downloaded from YouTube.</p>
         <div class="mt-auto d-flex align-items-center justify-content-between">
           <span class="badge text-bg-secondary"
-            >{{ counts.youtube }} files</span
+            >{{ counts.yt_vid_downloader }} files</span
           >
           <a
             class="btn btn-primary btn-sm"
-            href="{{ url_for('downloads_tool', tool='youtube') }}"
+            href="{{ url_for('downloads_tool', tool='yt_vid_downloader') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">PDF Decrypter</h5>
+        <p class="text-muted mb-3">Any decrypted PDF files.</p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.pdf_decrypter }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('downloads_tool', tool='pdf_decrypter') }}"
             >Open</a
           >
         </div>

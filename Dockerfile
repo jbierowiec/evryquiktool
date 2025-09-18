@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 # System dependencies
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg \
+      qpdf \                # required for pikepdf
  && rm -rf /var/lib/apt/lists/*
 
 # Set work directory

@@ -6,3 +6,5 @@ fitparse>=1.2
 moviepy>=1.0.3
 yt-dlp>=2024.7
 imageio-ffmpeg>=0.6
+pikepdf>=9.0.0
+PyPDF2>=3.0.0

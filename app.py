@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import shutil as _shutil
@@ -12,7 +13,7 @@ from werkzeug.utils import secure_filename
 from PIL import Image
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    send_from_directory, send_file, flash,
+    send_from_directory, send_file, flash, Blueprint, current_app, 
 )
 
 # Optional dependency for YouTube
@@ -48,13 +49,15 @@ UPLOAD_DIR = BASE / "uploads"
 DOWNLOAD_DIR = BASE / "downloads"
 
 UPLOADS_BY_TOOL = {
-    "combine": UPLOAD_DIR / "combine",
-    "youtube": UPLOAD_DIR / "youtube",
+    "image_combiner": UPLOAD_DIR / "image_combiner",
+    "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
+    "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
     #"activity_combiner": UPLOAD_DIR / "activity_combiner",
 }
 DOWNLOADS_BY_TOOL = {
-    "combine": DOWNLOAD_DIR / "combine",
-    "youtube": DOWNLOAD_DIR / "youtube",
+    "image_combiner": DOWNLOAD_DIR / "image_combiner",
+    "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
+    "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
     #"activity_combiner": DOWNLOAD_DIR / "activity_combiner",
 }
 
@@ -158,10 +161,10 @@ def landing():
 # -------------------------
 # Combine Images
 # -------------------------
-@app.route("/combine", methods=["GET", "POST"])
-def combine():
+@app.route("/image_combiner", methods=["GET", "POST"])
+def image_combiner():
     if request.method == "GET":
-        return render_template("combine.html", max_files=MAX_FILES)
+        return render_template("image_combiner.html", max_files=MAX_FILES)
 
     try:
         # How many inputs?
@@ -180,7 +183,7 @@ def combine():
 
         if len(files) < 2:
             flash("Please upload at least two images.", "warning")
-            return render_template("combine.html", max_files=MAX_FILES)
+            return render_template("image_combiner.html", max_files=MAX_FILES)
 
         # Orientation (vertical/horizontal)
         orientation = (request.form.get("orientation") or "vertical").lower().strip()
@@ -188,7 +191,7 @@ def combine():
             orientation = "vertical"
 
         # Save uploads
-        up_dir = UPLOADS_BY_TOOL["combine"]
+        up_dir = UPLOADS_BY_TOOL["image_combiner"]
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         saved_paths: List[Path] = []
         for idx, f in enumerate(files, start=1):
@@ -196,7 +199,7 @@ def combine():
             base, ext = os.path.splitext(name)
             if ext.lower() not in ALLOWED_IMG_EXTS:
                 flash(f"Unsupported file type: {name}", "danger")
-                return render_template("combine.html", max_files=MAX_FILES)
+                return render_template("image_combiner.html", max_files=MAX_FILES)
             safe_name = f"{stamp}_{idx}_{base}{ext.lower()}"
             dst = up_dir / safe_name
             f.save(dst)
@@ -210,7 +213,7 @@ def combine():
         safe_out = secure_filename(raw_name)
         safe_out = ensure_ext(safe_out, ".png")
 
-        out_dir = DOWNLOADS_BY_TOOL["combine"]
+        out_dir = DOWNLOADS_BY_TOOL["image_combiner"]
         out_path = out_dir / safe_out
         counter = 1
         base, ext = os.path.splitext(safe_out)
@@ -231,7 +234,7 @@ def combine():
 
     except Exception as e:
         flash(f"Combine failed: {e}", "danger")
-        return render_template("combine.html", max_files=MAX_FILES)
+        return render_template("image_combiner.html", max_files=MAX_FILES)
 
 
 # -------------------------
@@ -259,20 +262,20 @@ def _has_video_stream(path: Path) -> bool:
     except Exception:
         return True
 
-@app.route("/youtube", methods=["GET", "POST"])
-def youtube():
+@app.route("/yt_vid_downloader", methods=["GET", "POST"])
+def yt_vid_downloader():
     """Download a YouTube URL as MP4 (video) or MP3 (audio-only) and auto-send to browser."""
     if request.method == "GET":
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     # --- POST begins ---
     if yt_dlp is None:
         flash("Missing dependency: yt-dlp. Run: pip install yt-dlp", "danger")
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     if sh_which("ffmpeg") is None:
         flash("Missing dependency: ffmpeg. Install it (e.g., brew install ffmpeg) and restart.", "danger")
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     video_url = (request.form.get("video_url") or "").strip()
     output_name = (request.form.get("output_name") or "").strip()
@@ -280,14 +283,14 @@ def youtube():
 
     if not video_url:
         flash("Please paste a YouTube URL.", "warning")
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     # Normalize base filename
     safe = secure_filename(output_name) if output_name else "video"
     base, _ext = os.path.splitext(safe)
     final_base = base or "video"
 
-    out_dir: Path = DOWNLOADS_BY_TOOL["youtube"]
+    out_dir: Path = DOWNLOADS_BY_TOOL["yt_vid_downloader"]
     out_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(out_dir / f"{final_base}.%(ext)s")
 
@@ -308,14 +311,14 @@ def youtube():
                 ydl.download([video_url])
         except Exception as e:
             flash(f"Download failed: {e}", "danger")
-            return render_template("youtube.html")
+            return render_template("yt_vid_downloader.html")
 
         path = expected if expected.exists() else max(
             out_dir.glob(f"{final_base}.*"), key=lambda p: p.stat().st_mtime, default=None
         )
         if not path or not path.exists():
             flash("We couldn't locate the downloaded file. Please try again.", "danger")
-            return render_template("youtube.html")
+            return render_template("yt_vid_downloader.html")
 
         return send_file(path, as_attachment=True, download_name=path.name)
 
@@ -349,12 +352,12 @@ def youtube():
             ydl.download([video_url])
     except Exception as e:
         flash(f"Download failed: {e}", "danger")
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     saved = expected_mp4 if expected_mp4.exists() else newest_match()
     if not saved or not saved.exists():
         flash("We couldn't locate the downloaded file. Please try again.", "danger")
-        return render_template("youtube.html")
+        return render_template("yt_vid_downloader.html")
 
     # If it isn't an MP4 (e.g., WEBM) or it somehow lacks a video stream, do a guaranteed fallback.
     need_fallback = (saved.suffix.lower() != ".mp4") or (not _has_video_stream(saved))
@@ -381,12 +384,12 @@ def youtube():
                 ydl.download([video_url])
         except Exception as e:
             flash(f"Re-encode fallback failed: {e}", "danger")
-            return render_template("youtube.html")
+            return render_template("yt_vid_downloader.html")
 
         saved = expected_mp4 if expected_mp4.exists() else newest_match()
         if not saved or not saved.exists():
             flash("We couldn't locate the re-encoded file.", "danger")
-            return render_template("youtube.html")
+            return render_template("yt_vid_downloader.html")
 
     # Normalize filename to <final_base>.mp4
     target = expected_mp4
@@ -410,13 +413,103 @@ def youtube():
     return send_file(target, as_attachment=True, download_name=target.name)
 
 
+# configure max upload size (optional)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
+
+# Allowed extension helper
+def allowed_file(filename):
+    return '.' in filename and filename.lower().rsplit('.', 1)[1] == 'pdf'
+
+def ensure_dirs(*dirs: Path):
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+def tool_dirs(tool: str):
+    """Return (uploads_subdir, downloads_subdir) for a tool key."""
+    return (UPLOAD_DIR / tool, DOWNLOAD_DIR / tool)
+
+def ts_name(name: str) -> str:
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}__{name}"
+
+@app.route("/pdf_decrypter", methods=["GET", "POST"])
+def pdf_decrypter():
+    TOOL = "pdf_decrypter"
+    up_dir, down_dir = tool_dirs(TOOL)
+    ensure_dirs(up_dir, down_dir)
+
+    if request.method == "GET":
+        return render_template("pdf_decrypter.html")
+
+    uploaded = request.files.get("pdf_file")
+    password = request.form.get("password", "")
+    out_name = (request.form.get("output_name") or "").strip()
+
+    if not uploaded or uploaded.filename == "":
+        return render_template("pdf_decrypter.html", error="No file uploaded.")
+    if "." not in uploaded.filename or uploaded.filename.lower().rsplit(".", 1)[1] != "pdf":
+        return render_template("pdf_decrypter.html", error="Please upload a PDF file.")
+
+    orig_name = secure_filename(uploaded.filename)
+    # save encrypted file into uploads/pdf_decrypter/
+    uploaded_name = ts_name(orig_name)
+    upload_path = up_dir / uploaded_name
+    uploaded.save(upload_path)
+
+    # decide output filename (clean name for download; timestamped for disk)
+    if not out_name:
+        out_name = f"decrypted_{orig_name}"
+    if not out_name.lower().endswith(".pdf"):
+        out_name += ".pdf"
+    saved_out_name = ts_name(out_name)
+    out_path = down_dir / saved_out_name
+
+    # decrypt -> write to downloads/pdf_decrypter/
+    try:
+        import pikepdf
+        try:
+            with pikepdf.open(str(upload_path), password=password) as pdf:
+                pdf.save(str(out_path))
+        except pikepdf._qpdf.PasswordError:
+            return render_template("pdf_decrypter.html", error="Incorrect password for this PDF.")
+        except Exception:
+            # fall back to PyPDF2
+            raise
+    except Exception:
+        try:
+            from PyPDF2 import PdfReader, PdfWriter
+            with open(upload_path, "rb") as f:
+                reader = PdfReader(f)
+                if reader.is_encrypted:
+                    res = reader.decrypt(password)
+                    if res in (0, False):
+                        return render_template("pdf_decrypter.html", error="Incorrect password for this PDF.")
+                writer = PdfWriter()
+                for p in reader.pages:
+                    writer.add_page(p)
+                with open(out_path, "wb") as g:
+                    writer.write(g)
+        except Exception:
+            current_app.logger.exception("PDF decryption failed")
+            return render_template("pdf_decrypter.html", error="Failed to decrypt the PDF.")
+
+    # stream the decrypted file; disk copy already exists in downloads/pdf_decrypter/
+    return send_file(
+        out_path,
+        as_attachment=True,
+        download_name=out_name,
+        mimetype="application/pdf",
+        max_age=0,
+    )
+
+
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
 # -------------------------
 def _count_dict():
     return {
-        "combine": len(list_files(DOWNLOADS_BY_TOOL["combine"])),
-        "youtube": len(list_files(DOWNLOADS_BY_TOOL["youtube"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
 
@@ -424,8 +517,9 @@ def _count_dict():
 @app.route("/uploads")
 def uploads_index():
     counts = {
-        "combine": len(list_files(UPLOADS_BY_TOOL["combine"])),
-        "youtube": len(list_files(UPLOADS_BY_TOOL["youtube"])),
+        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
+        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
+        "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
@@ -438,8 +532,9 @@ def uploads_tool(tool):
         return redirect(url_for("uploads_index"))
     files = list_files(UPLOADS_BY_TOOL[tool])
     counts = {
-        "combine": len(list_files(UPLOADS_BY_TOOL["combine"])),
-        "youtube": len(list_files(UPLOADS_BY_TOOL["youtube"])),
+        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
+        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
+        "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
@@ -479,8 +574,9 @@ def del_upload(tool, filename):
 @app.route("/downloads")
 def downloads_index():
     counts = {
-        "combine": len(list_files(DOWNLOADS_BY_TOOL["combine"])),
-        "youtube": len(list_files(DOWNLOADS_BY_TOOL["youtube"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
@@ -493,8 +589,9 @@ def downloads_tool(tool):
         return redirect(url_for("downloads_index"))
     files = list_files(DOWNLOADS_BY_TOOL[tool])
     counts = {
-        "combine": len(list_files(DOWNLOADS_BY_TOOL["combine"])),
-        "youtube": len(list_files(DOWNLOADS_BY_TOOL["youtube"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)

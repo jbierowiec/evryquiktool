@@ -120,18 +120,26 @@
       <ul class="nav nav-pills flex-column gap-1">
         <li class="nav-item">
           <a
-            class="nav-link {{ 'active' if request.path.startswith('/combine') else '' }}"
-            href="{{ url_for('combine') }}"
+            class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
+            href="{{ url_for('image_combiner') }}"
           >
             Combine Images
           </a>
         </li>
         <li class="nav-item">
           <a
-            class="nav-link {{ 'active' if request.path.startswith('/youtube') else '' }}"
-            href="{{ url_for('youtube') }}"
+            class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
+            href="{{ url_for('yt_vid_downloader') }}"
           >
             YouTube Video Download
+          </a>
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/pdf_decrypter') else '' }}"
+            href="{{ url_for('pdf_decrypter') }}"
+          >
+            PDF Decrypter
           </a>
         </li>
        </ul>

@@ -129,7 +129,7 @@
                   Stack multiple screenshots into a single long image.
                 </p>
                 <a
-                  href="{{ url_for('combine') }}"
+                  href="{{ url_for('image_combiner') }}"
                   class="btn btn-primary btn-sm"
                   >Open</a
                 >
@@ -145,7 +145,23 @@
                   Download YouTube videos of your interest.
                 </p>
                 <a
-                  href="{{ url_for('youtube') }}"
+                  href="{{ url_for('yt_vid_downloader') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">PDF Decrypter</h5>
+                <p class="card-text text-muted">
+                  Decrypt and download PDF documents of your interest.
+                </p>
+                <a
+                  href="{{ url_for('pdf_decrypter') }}"
                   class="btn btn-primary btn-sm"
                   >Open</a
                 >
