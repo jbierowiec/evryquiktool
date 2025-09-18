@@ -4,7 +4,7 @@ FROM python:3.12-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ffmpeg \
-      qpdf \                # required for pikepdf
+      qpdf \ 
  && rm -rf /var/lib/apt/lists/*
 
 # Set work directory
