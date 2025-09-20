@@ -124,38 +124,6 @@
           <div class="col">
             <div class="card tool-card h-100">
               <div class="card-body">
-                <h5 class="card-title">Image Combiner</h5>
-                <p class="card-text text-muted">
-                  Stack multiple screenshots into a single long image.
-                </p>
-                <a
-                  href="{{ url_for('image_combiner') }}"
-                  class="btn btn-primary btn-sm"
-                  >Open</a
-                >
-              </div>
-            </div>
-          </div>
-
-          <div class="col">
-            <div class="card tool-card h-100">
-              <div class="card-body">
-                <h5 class="card-title">YouTube Video Downloader</h5>
-                <p class="card-text text-muted">
-                  Download YouTube videos of your interest.
-                </p>
-                <a
-                  href="{{ url_for('yt_vid_downloader') }}"
-                  class="btn btn-primary btn-sm"
-                  >Open</a
-                >
-              </div>
-            </div>
-          </div>
-
-          <div class="col">
-            <div class="card tool-card h-100">
-              <div class="card-body">
                 <h5 class="card-title">PDF Decrypter</h5>
                 <p class="card-text text-muted">
                   Decrypt and download PDF documents of your interest.
@@ -188,7 +156,35 @@
           <div class="col">
             <div class="card tool-card h-100">
               <div class="card-body">
-                <h5 class="card-title">Video Time Editor</h5>
+                <h5 class="card-title">PDF Combiner</h5>
+                <p class="card-text text-muted">
+                  Stack multiple PDFs into a single long PDF file.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">YouTube Video Downloader</h5>
+                <p class="card-text text-muted">
+                  Download any YouTube videos of your interest.
+                </p>
+                <a
+                  href="{{ url_for('yt_vid_downloader') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Video Time Crop Editor</h5>
                 <p class="card-text text-muted">
                   Edit the start, end, or remove a video segment.
                 </p>
@@ -200,9 +196,9 @@
           <div class="col">
             <div class="card tool-card h-100">
               <div class="card-body">
-                <h5 class="card-title">Activity Combiner</h5>
+                <h5 class="card-title">Audio to Text Transcriber</h5>
                 <p class="card-text text-muted">
-                  Combine separate Strava activities as one.
+                  Upload any audio file, and extract the text from it.
                 </p>
                 <button class="btn btn-primary btn-sm" disabled>Soon</button>
               </div>
@@ -212,9 +208,77 @@
           <div class="col">
             <div class="card tool-card h-100">
               <div class="card-body">
-                <h5 class="card-title">Crossword Puzzle Generator</h5>
+                <h5 class="card-title">Image Combiner</h5>
                 <p class="card-text text-muted">
-                  Generate your own crossword puzzles.
+                  Stack multiple screenshots into a single long image.
+                </p>
+                <a
+                  href="{{ url_for('image_combiner') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Image to Sketch Converter</h5>
+                <p class="card-text text-muted">
+                  Convert any image you like to a pencil sketch.
+                </p>
+                <a
+                  href="{{ url_for('image_sketch') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Image Background Remover</h5>
+                <p class="card-text text-muted">
+                  Remove the background from any image you like.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Image to Puzzle Converter</h5>
+                <p class="card-text text-muted">
+                 Convert any image into puzzle pieces that can be put back together.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Image Text Remover</h5>
+                <p class="card-text text-muted">
+                 Remove any kind of text from any image you like.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Hand to Typed Text Transcriber</h5>
+                <p class="card-text text-muted">
+                 Transcribe anything you handwrite to digitzed, readable text.
                 </p>
                 <button class="btn btn-primary btn-sm" disabled>Soon</button>
               </div>
@@ -226,7 +290,67 @@
               <div class="card-body">
                 <h5 class="card-title">Word Search Generator</h5>
                 <p class="card-text text-muted">
-                  Generate your own word searches.
+                  Generate your own word search puzzles for fun.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Crossword Puzzle Generator</h5>
+                <p class="card-text text-muted">
+                  Generate your own crossword puzzles for fun.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>          
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Activity Combiner</h5>
+                <p class="card-text text-muted">
+                  Combine separate activity files into one activity.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">QR Code Generator</h5>
+                <p class="card-text text-muted">
+                  Generate a QR Code for any application you need.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">Document Compressor</h5>
+                <p class="card-text text-muted">
+                  Compress any large file(s) into small file(s) while also saving quality.
+                </p>
+                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="col">
+            <div class="card tool-card h-100">
+              <div class="card-body">
+                <h5 class="card-title">File Zipper</h5>
+                <p class="card-text text-muted">
+                  Zip up any number and any kind of file(s) into a zipped folder.
                 </p>
                 <button class="btn btn-primary btn-sm" disabled>Soon</button>
               </div>

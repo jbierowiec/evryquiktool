@@ -4,13 +4,14 @@ import io
 import os
 import subprocess
 import shutil as _shutil
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List
 from shutil import which as sh_which
 
 from werkzeug.utils import secure_filename
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 from flask import (
     Flask, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, 
@@ -67,6 +68,7 @@ UPLOADS_BY_TOOL = {
     "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": UPLOAD_DIR / "pdf_encrypter",
+    "image_sketch": UPLOAD_DIR / "image_sketch",
     #"activity_combiner": UPLOAD_DIR / "activity_combiner",
 }
 DOWNLOADS_BY_TOOL = {
@@ -74,6 +76,7 @@ DOWNLOADS_BY_TOOL = {
     "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": DOWNLOAD_DIR / "pdf_encrypter",
+    "image_sketch": DOWNLOAD_DIR / "image_sketch",
     #"activity_combiner": DOWNLOAD_DIR / "activity_combiner",
 }
 
@@ -664,6 +667,142 @@ def pdf_encrypter():
         counts = {}
     return render_template("pdf_encrypter.html", error=error, message=message, counts=counts)
 
+def _ensure_tool_dirs(tool_key: str) -> tuple[Path, Path]:
+    """Return (upload_dir, download_dir) for a tool, creating them if needed."""
+    up = UPLOADS_BY_TOOL.get(tool_key)
+    down = DOWNLOADS_BY_TOOL.get(tool_key)
+    if not up:
+        raise RuntimeError(f"Server upload directory not configured for {tool_key}.")
+    if not down:
+        raise RuntimeError(f"Server download directory not configured for {tool_key}.")
+    up.mkdir(parents=True, exist_ok=True)
+    down.mkdir(parents=True, exist_ok=True)
+    return up, down
+
+def _is_allowed_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
+
+def image_to_sketch(in_path: Path, out_path: Path, blur_radius: int = 15, boost_contrast: bool = False) -> None:
+    """
+    Convert image to a pencil-style sketch using a color-dodge blend:
+      sketch = gray * 255 / (255 - blur(gray))
+    Writes exactly to `out_path` (caller decides extension; we use .png).
+    """
+    with Image.open(in_path) as im:
+        im = im.convert("RGB")
+        gray = ImageOps.grayscale(im)
+
+        if boost_contrast:
+            gray = ImageOps.autocontrast(gray, cutoff=1)
+
+        blur = gray.filter(ImageFilter.GaussianBlur(radius=max(1, int(blur_radius))))
+
+        g = np.array(gray, dtype=np.float32)
+        b = np.array(blur, dtype=np.float32)
+
+        denom = 255.0 - b
+        denom[denom < 1] = 1  # avoid division by zero
+        dodge = (g * 255.0) / denom
+        dodge = np.clip(dodge, 0, 255).astype(np.uint8)
+
+        sketch = Image.fromarray(dodge, mode="L")
+        if boost_contrast:
+            sketch = ImageOps.autocontrast(sketch, cutoff=1)
+
+        # Save exactly to requested path (caller enforces .png)
+        out_path = out_path.with_suffix(".png")
+        sketch.save(out_path, format="PNG")
+
+@app.route("/image_sketch", methods=["GET", "POST"])
+def image_sketch():
+    """
+    Upload an image -> save the original to uploads/image_sketcher/.
+    Convert to sketch -> save PNG to downloads/image_sketcher/ and return it.
+    Files are kept on disk so dashboard counters update.
+    """
+    error = None
+    message = None
+
+    TOOL_KEY = "image_sketch"
+
+    if request.method == "POST":
+        uploaded = request.files.get("image_file")
+        requested_out = (request.form.get("output_name") or "").strip()
+        boost = bool(request.form.get("high_contrast"))
+        try:
+            blur_radius = int(request.form.get("blur_radius", 15))
+        except ValueError:
+            blur_radius = 15
+
+        # Basic validations
+        if not uploaded or uploaded.filename.strip() == "":
+            error = "Please choose an image file."
+            return render_template("image_sketch.html", error=error)
+
+        if not _is_allowed_image(uploaded.filename):
+            error = "Unsupported file type. Please upload PNG/JPG/JPEG/WEBP/BMP."
+            return render_template("image_sketch.html", error=error)
+
+        # Ensure directories
+        try:
+            upload_base, download_base = _ensure_tool_dirs(TOOL_KEY)
+        except Exception as e:
+            error = f"Server misconfiguration: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        # Save upload with timestamp (like pdf_encrypter)
+        original_name = secure_filename(uploaded.filename) or "uploaded_image.png"
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        saved_input_name = f"{timestamp}_{original_name}"
+        input_path = upload_base / saved_input_name
+        try:
+            uploaded.save(str(input_path))
+        except Exception as e:
+            error = f"Failed to save uploaded file: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        # Decide output file name (always .png)
+        if requested_out:
+            out_stem = Path(requested_out).stem  # strip user extension
+            output_name_safe = f"{secure_filename(out_stem)}.png"
+        else:
+            output_name_safe = f"{Path(original_name).stem}_sketch.png"
+
+        output_path = download_base / output_name_safe
+        if output_path.exists():
+            output_path = download_base / f"{timestamp}_{output_name_safe}"
+
+        # Convert
+        try:
+            image_to_sketch(input_path, output_path, blur_radius=blur_radius, boost_contrast=boost)
+        except Exception as e:
+            try:
+                if output_path.exists():
+                    output_path.unlink()
+            except:
+                pass
+            error = f"Failed to convert image: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        if not output_path.exists():
+            error = "Sketch process completed but output file was not created."
+            return render_template("image_sketch.html", error=error)
+
+        flash(f"Sketch saved to downloads: {output_path.name}", "success")
+        return send_file(
+            str(output_path),
+            as_attachment=True,
+            download_name=output_path.name,
+            mimetype="image/png",
+        )
+
+    # GET
+    try:
+        counts = _count_dict() if "_count_dict" in globals() else {}
+    except Exception:
+        counts = {}
+    return render_template("image_sketch.html", error=error, message=message, counts=counts)
+
 
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
@@ -674,6 +813,7 @@ def _count_dict():
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
 
@@ -685,6 +825,7 @@ def uploads_index():
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
+        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
@@ -701,6 +842,7 @@ def uploads_tool(tool):
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
+        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
@@ -744,6 +886,7 @@ def downloads_index():
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
@@ -760,6 +903,7 @@ def downloads_tool(tool):
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
