@@ -123,7 +123,7 @@
             class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
             href="{{ url_for('image_combiner') }}"
           >
-            Combine Images
+            Image Combiner
           </a>
         </li>
         <li class="nav-item">
@@ -131,7 +131,7 @@
             class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
             href="{{ url_for('yt_vid_downloader') }}"
           >
-            YouTube Video Download
+            YouTube Video Downloader
           </a>
         </li>
         <li class="nav-item">
@@ -142,7 +142,15 @@
             PDF Decrypter
           </a>
         </li>
-       </ul>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/pdf_encrypter') else '' }}"
+            href="{{ url_for('pdf_encrypter') }}"
+          >
+            PDF Encrypter
+          </a>
+        </li>
+      </ul>
 
       <!-- This spacer pushes the Library to the bottom -->
       <div class="flex-grow-1"></div>

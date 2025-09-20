@@ -1,124 +1,138 @@
 {% extends "base.html" %} {% block content %}
-<h3 class="mb-3">Combine Images</h3>
+<div class="container py-4">
+  <h3 class="mb-3">Image Combiner</h3>
 
-<p class="text-muted">
-  Choose how many screenshots you want to combine (2–{{ max_files }}). Upload
-  them in the final order you want
-  <span id="orderHelp">(top to bottom)</span>, then click
-  <strong>Combine Images</strong>.
-</p>
+  <p class="text-muted">
+    Choose how many screenshots you want to combine (2–{{ max_files }}). Upload
+    them in the final order you want
+    <span id="orderHelp">(top to bottom)</span>, then click
+    <strong>Image Combiner</strong>.
+  </p>
 
-<h6>Tips</h6>
-<ul>
-  <li>Supported formats: PNG, JPG, JPEG, WEBP, BMP.</li>
-  <li>Different widths/heights? The app will align them automatically.</li>
-  <li>Order matters—files are stacked in the sequence shown.</li>
-</ul>
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
 
-<form method="post" enctype="multipart/form-data" id="combineForm">
-  <!-- Controls -->
-  <div class="row g-2 align-items-center mb-2">
-    <div class="col-auto">
-      <label class="col-form-label">Number of images</label>
+  <h6>Tips</h6>
+  <ul>
+    <li>Supported formats: PNG, JPG, JPEG, WEBP, BMP.</li>
+    <li>Different widths/heights? The app will align them automatically.</li>
+    <li>Order matters — files are stacked in the sequence shown.</li>
+  </ul>
+
+  <form
+    method="post"
+    enctype="multipart/form-data"
+    id="combineForm"
+    class="mb-3"
+  >
+    <!-- Controls -->
+    <div class="row g-2 align-items-center mb-2">
+      <div class="col-auto">
+        <label class="col-form-label">Number of images</label>
+      </div>
+      <div class="col-auto">
+        <input
+          type="number"
+          class="form-control form-control-sm"
+          id="num_images"
+          name="num_images"
+          value="2"
+          min="2"
+          max="{{ max_files }}"
+        />
+      </div>
+      <div class="col-auto">
+        <button
+          type="button"
+          class="btn btn-outline-secondary btn-sm"
+          id="buildInputsBtn"
+        >
+          Set
+        </button>
+      </div>
     </div>
-    <div class="col-auto">
+
+    <!-- Orientation -->
+    <div class="row g-2 align-items-center mb-3">
+      <div class="col-auto">
+        <label class="col-form-label">Layout</label>
+      </div>
+      <div class="col-auto">
+        <select
+          class="form-select form-select-sm"
+          name="orientation"
+          id="orientation"
+        >
+          <option value="vertical" selected>Vertical (top → bottom)</option>
+          <option value="horizontal">Horizontal (left → right)</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="uploadsWrapper" class="border rounded p-3 mb-3 bg-light-subtle">
+      <!-- dynamic file inputs render here -->
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Output file name</label>
       <input
-        type="number"
-        class="form-control form-control-sm"
-        id="num_images"
-        name="num_images"
-        value="2"
-        min="2"
-        max="{{ max_files }}"
+        type="text"
+        class="form-control"
+        id="output_name"
+        name="output_name"
+        placeholder="my_combined_image.png"
       />
+      <div class="form-text">
+        Leave off the extension if you want—we’ll add <code>.png</code> for you.
+      </div>
     </div>
-    <div class="col-auto">
-      <button
-        type="button"
-        class="btn btn-outline-secondary btn-sm"
-        id="buildInputsBtn"
-      >
-        Set
-      </button>
-    </div>
-  </div>
 
-  <!-- Orientation -->
-  <div class="row g-2 align-items-center mb-3">
-    <div class="col-auto">
-      <label class="col-form-label">Layout</label>
-    </div>
-    <div class="col-auto">
-      <select
-        class="form-select form-select-sm"
-        name="orientation"
-        id="orientation"
-      >
-        <option value="vertical" selected>Vertical (top → bottom)</option>
-        <option value="horizontal">Horizontal (left → right)</option>
-      </select>
-    </div>
-  </div>
+    <button class="btn btn-primary" type="submit">Combine Images</button>
+  </form>
 
-  <div id="uploadsWrapper" class="border rounded p-3 mb-3 bg-light-subtle">
-    <!-- dynamic file inputs render here -->
-  </div>
-
-  <div class="mb-3">
-    <label class="form-label">Output file name</label>
-    <input
-      type="text"
-      class="form-control"
-      id="output_name"
-      name="output_name"
-      placeholder="my_combined_image.png"
-    />
-    <div class="form-text">
-      We’ll save as PNG. Extension is optional (“.png” will be added if
-      omitted).
-    </div>
-  </div>
-
-  <button class="btn btn-primary" type="submit">Combine Images</button>
-</form>
-
-<hr class="my-4" />
+  <hr />
+</div>
 
 <script>
-  function renderInputs(n) {
-    const wrap = document.getElementById('uploadsWrapper');
-    wrap.innerHTML = '';
-    for (let i = 1; i <= n; i++) {
-      const g = document.createElement('div');
-      g.className = 'mb-3';
-      g.innerHTML = `
-        <label class="form-label">Image ${i}</label>
-        <input class="form-control" type="file" name="image_${i}" accept="image/*" required>
-      `;
-      wrap.appendChild(g);
+  (function () {
+    function renderInputs(n) {
+      const wrap = document.getElementById('uploadsWrapper');
+      wrap.innerHTML = '';
+      for (let i = 1; i <= n; i++) {
+        const g = document.createElement('div');
+        g.className = 'mb-3';
+        g.innerHTML = `
+          <label class="form-label">Image ${i}</label>
+          <input class="form-control" type="file" name="image_${i}" accept="image/*" required>
+        `;
+        wrap.appendChild(g);
+      }
     }
-  }
 
-  function updateOrderHelp() {
-    const o = document.getElementById('orientation').value;
-    document.getElementById('orderHelp').textContent = o === 'horizontal'
-      ? '(left to right)'
-      : '(top to bottom)';
-  }
+    function updateOrderHelp() {
+      const o = document.getElementById('orientation').value;
+      document.getElementById('orderHelp').textContent = o === 'horizontal'
+        ? '(left to right)'
+        : '(top to bottom)';
+    }
 
-  document.getElementById('buildInputsBtn').addEventListener('click', () => {
-    let n = parseInt(document.getElementById('num_images').value || '2', 10);
-    if (isNaN(n)) n = 2;
-    n = Math.max(2, Math.min({{ max_files }}, n));
-    renderInputs(n);
-  });
+    document.getElementById('buildInputsBtn').addEventListener('click', () => {
+      let n = parseInt(document.getElementById('num_images').value || '2', 10);
+      if (isNaN(n)) n = 2;
+      n = Math.max(2, Math.min({{ max_files }}, n));
+      renderInputs(n);
+    });
 
-  document.getElementById('orientation').addEventListener('change', updateOrderHelp);
+    document.getElementById('orientation').addEventListener('change', updateOrderHelp);
 
-  // initial render
-  document.addEventListener('DOMContentLoaded', () => {
-    renderInputs(2);
-    updateOrderHelp();
-  });
+    // initial render
+    document.addEventListener('DOMContentLoaded', () => {
+      renderInputs(2);
+      updateOrderHelp();
+    });
+  })();
 </script>
 {% endblock %}

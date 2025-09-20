@@ -21,6 +21,20 @@ try:
     import yt_dlp  # pip install yt-dlp
 except Exception:
     yt_dlp = None
+    
+# try optional backends
+try:
+    import pikepdf
+    _HAS_PIKEPDF = True
+except Exception:
+    _HAS_PIKEPDF = False
+
+try:
+    # PyPDF2 is the common fallback
+    from PyPDF2 import PdfReader, PdfWriter
+    _HAS_PYPDF2 = True
+except Exception:
+    _HAS_PYPDF2 = False
 
 # Make imageio-ffmpeg's bundled ffmpeg visible (works on Railway too)
 def has_ffmpeg() -> bool:
@@ -52,12 +66,14 @@ UPLOADS_BY_TOOL = {
     "image_combiner": UPLOAD_DIR / "image_combiner",
     "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
+    "pdf_encrypter": UPLOAD_DIR / "pdf_encrypter",
     #"activity_combiner": UPLOAD_DIR / "activity_combiner",
 }
 DOWNLOADS_BY_TOOL = {
     "image_combiner": DOWNLOAD_DIR / "image_combiner",
     "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
+    "pdf_encrypter": DOWNLOAD_DIR / "pdf_encrypter",
     #"activity_combiner": DOWNLOAD_DIR / "activity_combiner",
 }
 
@@ -502,6 +518,153 @@ def pdf_decrypter():
     )
 
 
+@app.route("/pdf_encrypter", methods=["GET", "POST"])
+def pdf_encrypter():
+    """
+    Upload a PDF -> saves original to UPLOADS_BY_TOOL['pdf_decrypter']
+    Encrypts to DOWNLOADS_BY_TOOL['pdf_decrypter'] and returns the encrypted file.
+    """
+    error = None
+    message = None
+
+    # Ensure the tool keys exist
+    UPLOAD_KEY = "pdf_encrypter"
+    DOWNLOAD_KEY = "pdf_encrypter"
+
+    upload_base: Path = UPLOADS_BY_TOOL.get(UPLOAD_KEY)
+    download_base: Path = DOWNLOADS_BY_TOOL.get(DOWNLOAD_KEY)
+
+    if request.method == "POST":
+        uploaded = request.files.get("pdf_file")
+        password = (request.form.get("password") or "").strip()
+        owner_pw = (request.form.get("owner_password") or "").strip()
+        output_name = (request.form.get("output_name") or "").strip()
+
+        # Basic validations
+        if not uploaded or uploaded.filename == "":
+            error = "No file uploaded."
+            return render_template("pdf_encrypter.html", error=error)
+
+        if not password:
+            error = "You must supply a password to encrypt the PDF."
+            return render_template("pdf_encrypter.html", error=error)
+
+        # Ensure upload/download directories exist
+        try:
+            if not upload_base:
+                raise RuntimeError("Server upload directory not configured for PDF encrypter.")
+            if not download_base:
+                raise RuntimeError("Server download directory not configured for PDF encrypter.")
+            upload_base.mkdir(parents=True, exist_ok=True)
+            download_base.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            error = f"Server misconfiguration: {e}"
+            return render_template("pdf_encrypter.html", error=error)
+
+        # Secure the filename and save the uploaded file into uploads/
+        original_name = secure_filename(uploaded.filename) or "uploaded.pdf"
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        saved_input_name = f"{timestamp}_{original_name}"
+        input_path = upload_base / saved_input_name
+        try:
+            uploaded.save(str(input_path))
+        except Exception as e:
+            error = f"Failed to save uploaded file: {e}"
+            return render_template("pdf_encrypter.html", error=error)
+
+        # Decide output filename
+        if not output_name:
+            output_name_safe = f"encrypted_{original_name}"
+        else:
+            output_name_safe = secure_filename(output_name)
+        if not output_name_safe.lower().endswith(".pdf"):
+            output_name_safe += ".pdf"
+        # avoid overwrite by adding timestamp if file exists
+        output_path = download_base / output_name_safe
+        if output_path.exists():
+            output_path = download_base / f"{timestamp}_{output_name_safe}"
+
+        # Read input bytes (from the saved file)
+        try:
+            with open(input_path, "rb") as fh:
+                input_bytes = fh.read()
+        except Exception as e:
+            error = f"Failed to read uploaded file: {e}"
+            return render_template("pdf_encrypter.html", error=error)
+
+        # Try pikepdf first (AES), then PyPDF2 fallback
+        try:
+            if _HAS_PIKEPDF:
+                try:
+                    with pikepdf.Pdf.open(io.BytesIO(input_bytes)) as pdf:
+                        # If owner_pw is empty, generate one so permissions behave predictably
+                        owner_used = owner_pw if owner_pw else pikepdf._helpers.generate_password()
+                        pdf.save(
+                            str(output_path),
+                            encryption=pikepdf.Encryption(
+                                user=password,
+                                owner=owner_used,
+                                R=4,  # AES-128; change if you want different strength
+                                allow=pikepdf.Permissions(extract=False),
+                            ),
+                        )
+                except Exception as e_pike:
+                    # fallback to PyPDF2 if pikepdf fails for this file
+                    if not _HAS_PYPDF2:
+                        raise RuntimeError(f"pikepdf failed ({e_pike}) and PyPDF2 not available")
+                    # else fall through to PyPDF2 block below by raising a sentinel
+                    raise
+            else:
+                # No pikepdf -> use PyPDF2
+                raise RuntimeError("pikepdf not available")
+        except Exception:
+            # PyPDF2 fallback
+            if _HAS_PYPDF2:
+                try:
+                    reader = PdfReader(io.BytesIO(input_bytes))
+                    writer = PdfWriter()
+                    for p in reader.pages:
+                        writer.add_page(p)
+                    # writer.encrypt(user_pwd, owner_pwd=None, use_128bit=True)
+                    # modern PyPDF2 uses keyword args (but some older versions differ)
+                    try:
+                        writer.encrypt(user_pwd=password, owner_pwd=(owner_pw or None), use_128bit=True)
+                    except TypeError:
+                        # fallback for older PyPDF2 API
+                        writer.encrypt(password, owner_pw or None, use_128bit=True)
+                    with open(output_path, "wb") as out_f:
+                        writer.write(out_f)
+                except Exception as e_p2:
+                    error = f"Encryption failed (PyPDF2): {e_p2}"
+                    return render_template("pdf_encrypter.html", error=error)
+            else:
+                error = "Server missing PDF libraries. Install pikepdf or PyPDF2."
+                return render_template("pdf_encrypter.html", error=error)
+
+        # At this point output_path should exist
+        if not output_path.exists():
+            error = "Encryption process completed but output file was not created."
+            return render_template("pdf_encrypter.html", error=error)
+
+        # Optionally flash a message and return the file for download.
+        flash(f"Encrypted PDF saved to downloads: {output_path.name}", "success")
+
+        # return the file as attachment while keeping the file on the server
+        return send_file(
+            str(output_path),
+            as_attachment=True,
+            download_name=output_path.name,
+            mimetype="application/pdf",
+        )
+
+    # GET -> show template (you can pass counts if your template expects them)
+    try:
+        counts = _count_dict() if "_count_dict" in globals() else {}
+    except Exception:
+        counts = {}
+    return render_template("pdf_encrypter.html", error=error, message=message, counts=counts)
+
+
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
 # -------------------------
@@ -510,6 +673,7 @@ def _count_dict():
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
+        "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
 
@@ -520,6 +684,7 @@ def uploads_index():
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
+        "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
@@ -535,6 +700,7 @@ def uploads_tool(tool):
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
+        "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
@@ -577,6 +743,7 @@ def downloads_index():
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
+        "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
@@ -592,6 +759,7 @@ def downloads_tool(tool):
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
+        "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
