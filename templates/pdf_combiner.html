@@ -1,0 +1,109 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">PDF Combiner</h3>
+
+  <p class="text-muted">
+    Choose how many PDF files you want to combine (2–{{ max_files }}). Upload
+    them in the final order you want (first to last), then click
+    <strong>Combine PDFs</strong>.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
+
+  <h6>Tips</h6>
+  <ul>
+    <li>Supported format: <code>.pdf</code> only.</li>
+    <li>Order matters — files are merged in the sequence shown.</li>
+    <li>
+      All uploads are saved to <code>uploads/</code>. Combined files go to
+      <code>downloads/</code>.
+    </li>
+  </ul>
+
+  <form method="post" enctype="multipart/form-data" id="mergeForm" class="mb-3">
+    <!-- Controls -->
+    <div class="row g-2 align-items-center mb-2">
+      <div class="col-auto">
+        <label class="col-form-label">Number of PDFs</label>
+      </div>
+      <div class="col-auto">
+        <input
+          type="number"
+          class="form-control form-control-sm"
+          id="num_pdfs"
+          name="num_pdfs"
+          value="2"
+          min="2"
+          max="{{ max_files }}"
+        />
+      </div>
+      <div class="col-auto">
+        <button
+          type="button"
+          class="btn btn-outline-secondary btn-sm"
+          id="buildInputsBtn"
+        >
+          Set
+        </button>
+      </div>
+    </div>
+
+    <div id="uploadsWrapper" class="border rounded p-3 mb-3 bg-light-subtle">
+      <!-- dynamic file inputs render here -->
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Output file name</label>
+      <input
+        type="text"
+        class="form-control"
+        id="output_name"
+        name="output_name"
+        placeholder="my_merged_document.pdf"
+      />
+      <div class="form-text">
+        Leave off the extension if you want — we’ll add <code>.pdf</code> for
+        you.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Combine PDFs</button>
+  </form>
+
+  <hr />
+</div>
+
+<script>
+  (function () {
+    function renderInputs(n) {
+      const wrap = document.getElementById('uploadsWrapper');
+      wrap.innerHTML = '';
+      for (let i = 1; i <= n; i++) {
+        const g = document.createElement('div');
+        g.className = 'mb-3';
+        g.innerHTML = `
+          <label class="form-label">PDF ${i}</label>
+          <input class="form-control" type="file" name="pdf_${i}" accept="application/pdf" required>
+        `;
+        wrap.appendChild(g);
+      }
+    }
+
+    document.getElementById('buildInputsBtn').addEventListener('click', () => {
+      let n = parseInt(document.getElementById('num_pdfs').value || '2', 10);
+      if (isNaN(n)) n = 2;
+      n = Math.max(2, Math.min({{ max_files }}, n));
+      renderInputs(n);
+    });
+
+    // initial render
+    document.addEventListener('DOMContentLoaded', () => {
+      renderInputs(2);
+    });
+  })();
+</script>
+{% endblock %}

@@ -120,22 +120,6 @@
       <ul class="nav nav-pills flex-column gap-1">
         <li class="nav-item">
           <a
-            class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
-            href="{{ url_for('image_combiner') }}"
-          >
-            Image Combiner
-          </a>
-        </li>
-        <li class="nav-item">
-          <a
-            class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
-            href="{{ url_for('yt_vid_downloader') }}"
-          >
-            YouTube Video Downloader
-          </a>
-        </li>
-        <li class="nav-item">
-          <a
             class="nav-link {{ 'active' if request.path.startswith('/pdf_decrypter') else '' }}"
             href="{{ url_for('pdf_decrypter') }}"
           >
@@ -152,10 +136,34 @@
         </li>
         <li class="nav-item">
           <a
+            class="nav-link {{ 'active' if request.path.startswith('/pdf_combiner') else '' }}"
+            href="{{ url_for('pdf_combiner') }}"
+          >
+            PDF Combiner
+          </a>
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
+            href="{{ url_for('yt_vid_downloader') }}"
+          >
+            YouTube Video Downloader
+          </a>
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
+            href="{{ url_for('image_combiner') }}"
+          >
+            Image Combiner
+          </a>
+        </li>
+        <li class="nav-item">
+          <a
             class="nav-link {{ 'active' if request.path.startswith('/image_sketch') else '' }}"
             href="{{ url_for('image_sketch') }}"
           >
-            Image Sketcher
+            Image to Sketch Converter
           </a>
         </li>
       </ul>

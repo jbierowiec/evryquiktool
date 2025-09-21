@@ -17,13 +17,13 @@ from flask import (
     send_from_directory, send_file, flash, Blueprint, current_app, 
 )
 
-# Optional dependency for YouTube
+
+# Optional dependencies 
 try:
-    import yt_dlp  # pip install yt-dlp
+    import yt_dlp  
 except Exception:
     yt_dlp = None
     
-# try optional backends
 try:
     import pikepdf
     _HAS_PIKEPDF = True
@@ -31,11 +31,11 @@ except Exception:
     _HAS_PIKEPDF = False
 
 try:
-    # PyPDF2 is the common fallback
     from PyPDF2 import PdfReader, PdfWriter
     _HAS_PYPDF2 = True
 except Exception:
     _HAS_PYPDF2 = False
+
 
 # Make imageio-ffmpeg's bundled ffmpeg visible (works on Railway too)
 def has_ffmpeg() -> bool:
@@ -69,21 +69,23 @@ UPLOADS_BY_TOOL = {
     "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": UPLOAD_DIR / "pdf_encrypter",
     "image_sketch": UPLOAD_DIR / "image_sketch",
-    #"activity_combiner": UPLOAD_DIR / "activity_combiner",
+    "pdf_combiner": UPLOAD_DIR / "pdf_combiner",    
 }
+
 DOWNLOADS_BY_TOOL = {
     "image_combiner": DOWNLOAD_DIR / "image_combiner",
     "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": DOWNLOAD_DIR / "pdf_encrypter",
     "image_sketch": DOWNLOAD_DIR / "image_sketch",
-    #"activity_combiner": DOWNLOAD_DIR / "activity_combiner",
+    "pdf_combiner": DOWNLOAD_DIR / "pdf_combiner",    
 }
 
 # Ensure folders exist
 for p in [UPLOAD_DIR, DOWNLOAD_DIR, *UPLOADS_BY_TOOL.values(), *DOWNLOADS_BY_TOOL.values()]:
     p.mkdir(parents=True, exist_ok=True)
 
+ALLOWED_PDF_EXT = {".pdf"}
 ALLOWED_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 MAX_FILES = 10
 
@@ -178,7 +180,7 @@ def landing():
 
 
 # -------------------------
-# Combine Images
+# Image Combiner
 # -------------------------
 @app.route("/image_combiner", methods=["GET", "POST"])
 def image_combiner():
@@ -257,12 +259,8 @@ def image_combiner():
 
 
 # -------------------------
-# YouTube Downloader
+# YouTube Video Downloader
 # -------------------------
-# Assumes:
-#   - yt_dlp is imported
-#   - DOWNLOADS_BY_TOOL["youtube"] exists and points to a folder
-
 def _has_video_stream(path: Path) -> bool:
     """Return True if ffprobe reports at least one video stream in the file."""
     if sh_which("ffprobe") is None:
@@ -450,6 +448,10 @@ def tool_dirs(tool: str):
 def ts_name(name: str) -> str:
     return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}__{name}"
 
+
+# -------------------------
+# PDF Decrypter
+# -------------------------
 @app.route("/pdf_decrypter", methods=["GET", "POST"])
 def pdf_decrypter():
     TOOL = "pdf_decrypter"
@@ -521,6 +523,9 @@ def pdf_decrypter():
     )
 
 
+# -------------------------
+# PDF Encrypter
+# -------------------------
 @app.route("/pdf_encrypter", methods=["GET", "POST"])
 def pdf_encrypter():
     """
@@ -667,6 +672,109 @@ def pdf_encrypter():
         counts = {}
     return render_template("pdf_encrypter.html", error=error, message=message, counts=counts)
 
+
+def _is_pdf(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_PDF_EXT
+
+def _safe_output_name(name: str) -> str:
+    """
+    Normalize the output file name, enforcing .pdf extension and a reasonable base.
+    """
+    name = (name or "").strip()
+    if not name:
+        # default with timestamp
+        name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    else:
+        # sanitize
+        name = secure_filename(name)
+        if not name:
+            name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        # ensure .pdf
+        if not name.lower().endswith(".pdf"):
+            name = f"{name}.pdf"
+    return name
+
+
+# -----------------------------
+# PDF combiner Page
+# -----------------------------
+@app.route("/pdf_combiner", methods=["GET", "POST"])
+def pdf_combiner():
+    """
+    UI + handler for combining PDFs.
+    - Uploads go to uploads/pdf_combiner/
+    - Merged output goes to downloads/pdf_combiner/
+    """
+    tool_slug = "pdf_combiner"
+    uploads_folder = UPLOAD_DIR / tool_slug
+    downloads_folder = DOWNLOAD_DIR / tool_slug
+    uploads_folder.mkdir(parents=True, exist_ok=True)
+    downloads_folder.mkdir(parents=True, exist_ok=True)
+
+    if request.method == "GET":
+        return render_template("pdf_combiner.html", max_files=MAX_FILES)
+
+    # How many files?
+    try:
+        n = int(request.form.get("num_pdfs", "2"))
+    except ValueError:
+        n = 2
+    n = max(2, min(MAX_FILES, n))
+
+    uploaded_paths = []
+    errors = []
+
+    # Collect files in order: pdf_1 ... pdf_n
+    for i in range(1, n + 1):
+        f = request.files.get(f"pdf_{i}")
+        if not f or not f.filename.strip():
+            errors.append(f"Missing file for PDF {i}.")
+            continue
+
+        fname = secure_filename(f.filename)
+        if Path(fname).suffix.lower() != ".pdf":
+            errors.append(f"File {i} must be a .pdf: got '{fname}'.")
+            continue
+
+        dst = uploads_folder / fname
+        if dst.exists():
+            dst = uploads_folder / f"{dst.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        f.save(dst)
+        uploaded_paths.append(dst)
+
+    if errors:
+        return render_template("pdf_combiner.html", max_files=MAX_FILES, error=" ".join(errors))
+
+    if len(uploaded_paths) < 2:
+        return render_template("pdf_combiner.html", max_files=MAX_FILES, error="Please provide at least two PDFs.")
+
+    # Merge
+    writer = PdfWriter()
+    try:
+        for path in uploaded_paths:
+            reader = PdfReader(str(path))
+            for page in reader.pages:
+                writer.add_page(page)
+    except Exception as e:
+        return render_template("pdf_combiner.html", max_files=MAX_FILES, error=f"Failed to merge: {e}")
+
+    # Output name + write to downloads/pdf_combiner/
+    out_name = _safe_output_name(request.form.get("output_name", ""))
+    out_path = downloads_folder / out_name
+    try:
+        with out_path.open("wb") as fh:
+            writer.write(fh)
+    except Exception as e:
+        return render_template("pdf_combiner.html", max_files=MAX_FILES, error=f"Failed to write output: {e}")
+
+    # Immediately download (a copy remains in downloads/pdf_combiner/)
+    return send_file(str(out_path),
+                     mimetype="application/pdf",
+                     as_attachment=True,
+                     download_name=out_name,
+                     max_age=0)
+
+
 def _ensure_tool_dirs(tool_key: str) -> tuple[Path, Path]:
     """Return (upload_dir, download_dir) for a tool, creating them if needed."""
     up = UPLOADS_BY_TOOL.get(tool_key)
@@ -713,6 +821,10 @@ def image_to_sketch(in_path: Path, out_path: Path, blur_radius: int = 15, boost_
         out_path = out_path.with_suffix(".png")
         sketch.save(out_path, format="PNG")
 
+
+# -------------------------
+# Image to Sketch Converter
+# -------------------------
 @app.route("/image_sketch", methods=["GET", "POST"])
 def image_sketch():
     """
@@ -814,7 +926,7 @@ def _count_dict():
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
+        "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
     }
 
 
@@ -826,7 +938,7 @@ def uploads_index():
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
-        #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
+        "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -843,7 +955,7 @@ def uploads_tool(tool):
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
-        #"activity_combiner": len(list_files(UPLOADS_BY_TOOL["activity_combiner"])),
+        "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -887,7 +999,7 @@ def downloads_index():
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
+        "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -904,7 +1016,7 @@ def downloads_tool(tool):
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        #"activity_combiner": len(list_files(DOWNLOADS_BY_TOOL["activity_combiner"])),
+        "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 
@@ -945,323 +1057,3 @@ def del_download(tool, filename):
 # -------------------------
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-'''
-# ===== Imports (place near your other imports) =====
-import io
-import os
-import datetime as dt
-from pathlib import Path
-from typing import List, Tuple, Optional
-
-from flask import request, send_file, render_template, flash, redirect, url_for, abort
-from werkzeug.utils import secure_filename
-
-# GPX/FIT helpers
-import gpxpy
-import gpxpy.gpx
-
-try:
-    from fitparse import FitFile
-    _HAS_FITPARSE = True
-except Exception:
-    _HAS_FITPARSE = False
-
-# ===== Configuration (adjust paths to match your app’s layout) =====
-#BASE_DIR = Path(__file__).resolve().parent
-#DOWNLOADS_DIR = BASE_DIR / "downloads" / "activities" / "combine"
-#DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
-ALLOWED_EXTS = {".gpx", ".fit"}
-
-
-# ===== Utilities =====
-def _is_allowed(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_EXTS
-
-def _semicircles_to_degrees(semicircles: Optional[float]) -> Optional[float]:
-    if semicircles is None:
-        return None
-    return float(semicircles) * (180.0 / 2**31)
-
-def _read_gpx_to_trackpoints(fp: io.BytesIO) -> List[Tuple[Optional[float], Optional[float], Optional[float], Optional[dt.datetime]]]:
-    """
-    Returns a list of (lat, lon, ele, time) from a GPX file-like.
-    """
-    fp.seek(0)
-    gpx = gpxpy.parse(fp.read().decode("utf-8", errors="ignore"))
-    pts = []
-    for trk in gpx.tracks:
-        for seg in trk.segments:
-            for p in seg.points:
-                pts.append((p.latitude, p.longitude, p.elevation, p.time))
-    # Also consider GPX routes/waypoints if tracks missing
-    if not pts:
-        for rte in gpx.routes:
-            for p in rte.points:
-                pts.append((p.latitude, p.longitude, p.elevation, None))
-        for w in gpx.waypoints:
-            pts.append((w.latitude, w.longitude, w.elevation, None))
-    return pts
-
-def _read_fit_to_trackpoints(fp: io.BytesIO) -> List[Tuple[Optional[float], Optional[float], Optional[float], Optional[dt.datetime]]]:
-    """
-    Parse FIT and return list of (lat, lon, ele, time). Requires fitparse.
-    """
-    if not _HAS_FITPARSE:
-        raise RuntimeError("FIT parsing requires the 'fitparse' package.")
-    fp.seek(0)
-    fit = FitFile(fp)
-    pts = []
-    for record in fit.get_messages("record"):
-        lat = lon = ele = time = None
-        for d in record:
-            name = d.name
-            val = d.value
-            if name == "position_lat":
-                lat = _semicircles_to_degrees(val)
-            elif name == "position_long":
-                lon = _semicircles_to_degrees(val)
-            elif name == "altitude":
-                ele = float(val) if val is not None else None
-            elif name == "timestamp":
-                time = val if isinstance(val, dt.datetime) else None
-        if lat is not None and lon is not None:
-            pts.append((lat, lon, ele, time))
-    return pts
-
-def _collect_points_from_uploads(files) -> List[Tuple[Optional[float], Optional[float], Optional[float], Optional[dt.datetime]]]:
-    """
-    Accepts an iterable of Werkzeug FileStorage objects.
-    Reads GPX and/or FIT and returns a single combined list of (lat, lon, ele, time),
-    preserving per-file order, then concatenating in the order the user selected.
-    """
-    combined = []
-    for f in files:
-        if not f or f.filename == "":
-            continue
-        if not _is_allowed(f.filename):
-            continue
-        suffix = Path(f.filename).suffix.lower()
-        buf = io.BytesIO(f.read())
-        if suffix == ".gpx":
-            combined.extend(_read_gpx_to_trackpoints(buf))
-        elif suffix == ".fit":
-            combined.extend(_read_fit_to_trackpoints(buf))
-    # If there are timestamps, we *could* sort by time; by default, keep file order.
-    return combined
-
-def _build_gpx(points: List[Tuple[Optional[float], Optional[float], Optional[float], Optional[dt.datetime]]]) -> str:
-    """
-    Build a simple GPX 1.1 document with a single track and a single segment.
-    """
-    gpx = gpxpy.gpx.GPX()
-    gpx.creator = "Activity Combiner"
-    track = gpxpy.gpx.GPXTrack()
-    gpx.tracks.append(track)
-    seg = gpxpy.gpx.GPXTrackSegment()
-    track.segments.append(seg)
-    for lat, lon, ele, t in points:
-        if lat is None or lon is None:
-            continue
-        p = gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon, elevation=ele, time=t)
-        seg.points.append(p)
-    return gpx.to_xml()
-
-# ===== Routes =====
-
-@app.route("/activity-combiner", methods=["GET", "POST"])
-def activity_combiner():
-    """
-    GET: show the Activity Combiner page
-    POST: accept multiple GPX/FIT files, merge, and produce a single GPX
-          (keeps copies of uploads in uploads/activity_combiner and
-           writes the result to downloads/activity_combiner so badges update)
-    """
-    if request.method == "GET":
-        return render_template("activity_combiner.html")
-
-    # POST
-    files = request.files.getlist("tracks")
-    out_fmt = (request.form.get("format", "gpx") or "gpx").lower()  # 'gpx' or 'fit'
-    output_name = (request.form.get("output_name") or "").strip()
-
-    if not files or all((not f or f.filename == "") for f in files):
-        flash("Please choose at least one GPX or FIT file.", "warning")
-        return redirect(url_for("activity_combiner"))
-
-    # Normalize output filename + extension
-    if not output_name:
-        output_name = "combined_activity"
-    base, ext = os.path.splitext(output_name)
-    desired_ext = f".{out_fmt}"
-    if ext.lower() != desired_ext:
-        output_name = f"{base or 'combined_activity'}{desired_ext}"
-
-    uploads_dir = UPLOADS_BY_TOOL["activity_combiner"]
-    downloads_dir = DOWNLOADS_BY_TOOL["activity_combiner"]
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        # Save copies of the uploaded files into uploads/activity_combiner
-        saved_any = False
-        for f in files:
-            if not f or not f.filename:
-                continue
-            fname = secure_filename(f.filename)
-            if not fname:
-                continue
-            (uploads_dir / fname).write_bytes(f.read())
-            saved_any = True
-            # rewind the file stream so downstream readers can parse it
-            f.stream.seek(0)
-
-        if not saved_any:
-            flash("No valid files were provided.", "warning")
-            return redirect(url_for("activity_combiner"))
-
-        # Collect points from the uploaded files (function you already have)
-        points = _collect_points_from_uploads(files)
-        if not points:
-            flash("No GPS track points were found in the provided files.", "warning")
-            return redirect(url_for("activity_combiner"))
-
-        # We only emit GPX here (FIT export not available in this environment)
-        if out_fmt == "fit":
-            flash("Direct FIT export isn’t available here. Providing a GPX instead.", "info")
-            output_name = f"{Path(output_name).stem}.gpx"
-
-        # Build and save the GPX to downloads/activity_combiner so the counter updates
-        xml = _build_gpx(points)
-        out_path = downloads_dir / secure_filename(output_name)
-        out_path.write_text(xml, encoding="utf-8")
-
-        # Send the saved file (keeps a copy on disk for the downloads counter)
-        return send_file(out_path, as_attachment=True, download_name=out_path.name)
-
-    except Exception as e:
-        flash(f"Failed to combine activities: {e}", "danger")
-        return redirect(url_for("activity_combiner"))
-
-
-
-
-
-from pathlib import Path
-from flask import send_from_directory, url_for, render_template, abort, request
-
-BASE_DIR = Path(__file__).resolve().parent
-DOWNLOAD_DIR = BASE_DIR / "downloads" / "activity_combiner"   # <- set this to where you actually save GPX
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-def latest_combined_gpx(default_name: str = "are.gpx") -> str | None:
-    """Return name of most recent .gpx in DOWNLOAD_DIR, or default_name if present, else None."""
-    gpx_files = list(DOWNLOAD_DIR.glob("*.gpx"))
-    if gpx_files:
-        gpx_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        return gpx_files[0].name
-    default_path = DOWNLOAD_DIR / default_name
-    return default_name if default_path.exists() else None
-
-
-# Make `latest_combined` available in all templates so the button can enable
-@app.context_processor
-def inject_latest_combined():
-    return {"latest_combined": latest_combined_gpx()}
-
-
-# Serve combined files from the configured folder (no overlap with /downloads)
-@app.route("/combined-gpx/<path:filename>")
-def serve_combined_file(filename):
-    safe_path = DOWNLOAD_DIR / filename
-    if not safe_path.exists():
-        abort(404)
-    return send_from_directory(DOWNLOAD_DIR, filename)
-
-
-@app.route("/tools/activity_combiner/view")
-def view_combined_route():
-    filename = request.args.get("filename") or latest_combined_gpx()
-    if not filename:
-        return render_template("map_viewer.html", filename=None,
-                               error="No combined GPX found yet. Create one first.")
-    if not (DOWNLOAD_DIR / filename).exists():
-        return render_template("map_viewer.html", filename=None,
-                               error=f"File not found: {filename}")
-
-    # IMPORTANT: use the new /combined-gpx/... route
-    gpx_url = url_for("serve_combined_file", filename=filename)
-    return render_template("map_viewer.html", filename=filename, gpx_url=gpx_url)
-
-'''

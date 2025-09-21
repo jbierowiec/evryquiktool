@@ -1,60 +1,14 @@
 {% extends "base.html" %} {% block content %}
 <h3 class="mb-3">
-  Downloads
-  {% if tool %}
-    {% if tool == "yt_vid_downloader" %}
-      — YouTube Video Downloader
-    {% elif tool == "pdf_decrypter" %}
-      — PDF Decrypter
-    {% elif tool == "pdf_encrypter" %}
-      — PDF Encrypter
-    {% else %}
-      — {{ tool|replace("_", " ")|title }}
-    {% endif %}
-  {% endif %}
+  Downloads {% if tool %} {% if tool == "yt_vid_downloader" %} — YouTube Video
+  Downloader {% elif tool == "pdf_decrypter" %} — PDF Decrypter {% elif tool ==
+  "pdf_encrypter" %} — PDF Encrypter {% elif tool == "pdf_combiner" %} — PDF
+  Combiner {% else %} — {{ tool|replace("_", "")|title }} {% endif %} {% endif
+  %}
 </h3>
-
 
 {% if not tool %}
 <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
-  <div class="col">
-    <div class="card tool-card h-100">
-      <div class="card-body d-flex flex-column">
-        <h5 class="card-title">Image Combiner</h5>
-        <p class="text-muted mb-3">Screenshots you downloaded.</p>
-        <div class="mt-auto d-flex align-items-center justify-content-between">
-          <span class="badge text-bg-secondary"
-            >{{ counts.image_combiner }} files</span
-          >
-          <a
-            class="btn btn-primary btn-sm"
-            href="{{ url_for('downloads_tool', tool='image_combiner') }}"
-            >Open</a
-          >
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="col">
-    <div class="card tool-card h-100">
-      <div class="card-body d-flex flex-column">
-        <h5 class="card-title">YouTube Video Downloader</h5>
-        <p class="text-muted mb-3">Any files downloaded from YouTube.</p>
-        <div class="mt-auto d-flex align-items-center justify-content-between">
-          <span class="badge text-bg-secondary"
-            >{{ counts.yt_vid_downloader }} files</span
-          >
-          <a
-            class="btn btn-primary btn-sm"
-            href="{{ url_for('downloads_tool', tool='yt_vid_downloader') }}"
-            >Open</a
-          >
-        </div>
-      </div>
-    </div>
-  </div>
-
   <div class="col">
     <div class="card tool-card h-100">
       <div class="card-body d-flex flex-column">
@@ -96,8 +50,67 @@
   <div class="col">
     <div class="card tool-card h-100">
       <div class="card-body d-flex flex-column">
-        <h5 class="card-title">Image Sketcher</h5>
-        <p class="text-muted mb-3">Any images downloaded after being converted to sketches.</p>
+        <h5 class="card-title">PDF Combiner</h5>
+        <p class="text-muted mb-3">PDFs you downloaded.</p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.pdf_combiner }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('downloads_tool', tool='pdf_combiner') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">YouTube Video Downloader</h5>
+        <p class="text-muted mb-3">Any files downloaded from YouTube.</p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.yt_vid_downloader }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('downloads_tool', tool='yt_vid_downloader') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">Image Combiner</h5>
+        <p class="text-muted mb-3">Screenshots you downloaded.</p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.image_combiner }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('downloads_tool', tool='image_combiner') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">Image to Sketch Converter</h5>
+        <p class="text-muted mb-3">
+          Any images downloaded after being converted to sketches.
+        </p>
         <div class="mt-auto d-flex align-items-center justify-content-between">
           <span class="badge text-bg-secondary"
             >{{ counts.image_sketch }} files</span
@@ -111,27 +124,7 @@
       </div>
     </div>
   </div>
-
-  <!--
-  <div class="col">
-    <div class="card tool-card h-100">
-      <div class="card-body d-flex flex-column">
-        <h5 class="card-title">Activity Combiner</h5>
-        <p class="text-muted mb-3">Any files combined together.</p>
-        <div class="mt-auto d-flex align-items-center justify-content-between">
-          <span class="badge text-bg-secondary"
-            >{{ counts.activity_combiner }} files</span
-          >
-          <a
-            class="btn btn-primary btn-sm"
-            href="{{ url_for('downloads_tool', tool='activity_combiner') }}"
-            >Open</a
-          >
-        </div>
-      </div>
-    </div>
-  </div>
---></div>
+</div>
 
 {% else %} {% if files %}
 <div class="file-grid">
