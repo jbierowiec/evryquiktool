@@ -107,7 +107,8 @@
       }
     </style>
   </head>
-  <body class="d-flex">
+  <!-- 👇 change is here: added align-items-start -->
+  <body class="d-flex align-items-start">
     <!-- Mobile top bar (visible only on small screens) -->
     <nav
       class="navbar navbar-light bg-body-tertiary border-bottom d-md-none sticky-top"
@@ -116,10 +117,11 @@
         class="container-fluid d-flex justify-content-between align-items-center"
       >
         <!-- Brand (left side) -->
+        <!--
         <a class="navbar-brand fw-bold mb-0 h5" href="{{ url_for('landing') }}">
           Tools
         </a>
-
+        -->
         <!-- Hamburger (right side) -->
         <button
           class="navbar-toggler"
