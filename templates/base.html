@@ -18,6 +18,7 @@
       body {
         min-height: 100vh;
       }
+      /* Desktop/tablet sidebar */
       .sidebar {
         width: 280px;
         border-right: 1px solid #e5e5e5;
@@ -36,8 +37,8 @@
         color: #000 !important;
       }
       .sidebar .nav-link.active {
-        background-color: #0d6efd; /* Bootstrap primary blue, or your brand color */
-        color: #fff !important; /* white text when active */
+        background-color: #0d6efd;
+        color: #fff !important;
       }
       .brand {
         font-weight: 700;
@@ -46,15 +47,15 @@
       .content-area {
         flex: 1;
       }
-      .file-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-        gap: 12px;
+
+      /* Mobile navbar spacing so content isn't hidden behind it */
+      @media (max-width: 767.98px) {
+        main.content-area {
+          padding-top: 0.5rem;
+        }
       }
-      .code {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-          "Liberation Mono", "Courier New", monospace;
-      }
+
+      /* Buttons niceties (unchanged) */
       .btn {
         border-radius: 0.4rem !important;
         transition: all 0.2s ease-in-out;
@@ -65,12 +66,12 @@
       }
       .action-row {
         display: flex;
-        gap: 0.5rem; /* equal spacing between buttons */
+        gap: 0.5rem;
         width: 100%;
       }
       .action-row .btn-mini {
         flex: 1 1 0;
-        min-width: 60px; /* ensures icons look centered */
+        min-width: 60px;
         text-align: center;
         overflow: hidden;
         white-space: nowrap;
@@ -87,7 +88,7 @@
       }
       .action-row .btn-mini:hover {
         flex: 2 1 0;
-        background-color: rgba(0, 0, 0, 0.1); /* slightly darker background */
+        background-color: rgba(0, 0, 0, 0.1);
       }
       .btn-mini .label {
         max-width: 0;
@@ -107,8 +108,129 @@
     </style>
   </head>
   <body class="d-flex">
+    <!-- Mobile top bar (visible only on small screens) -->
+    <nav
+      class="navbar navbar-light bg-body-tertiary border-bottom d-md-none sticky-top"
+    >
+      <div
+        class="container-fluid d-flex justify-content-between align-items-center"
+      >
+        <!-- Brand (left side) -->
+        <a class="navbar-brand fw-bold mb-0 h5" href="{{ url_for('landing') }}">
+          Tools
+        </a>
+
+        <!-- Hamburger (right side) -->
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="offcanvas"
+          data-bs-target="#mobileMenu"
+          aria-controls="mobileMenu"
+          aria-label="Open tool menu"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Offcanvas: mobile menu -->
+    <div
+      class="offcanvas offcanvas-start"
+      tabindex="-1"
+      id="mobileMenu"
+      aria-labelledby="mobileMenuLabel"
+    >
+      <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="mobileMenuLabel">Tools</h5>
+        <button
+          type="button"
+          class="btn-close"
+          data-bs-dismiss="offcanvas"
+          aria-label="Close"
+        ></button>
+      </div>
+      <div class="offcanvas-body d-flex flex-column">
+        <!-- Primary nav (same links as sidebar) -->
+        <ul class="nav nav-pills flex-column gap-1 mb-3">
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/pdf_decrypter') else '' }}"
+              href="{{ url_for('pdf_decrypter') }}"
+              >PDF Decrypter</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/pdf_encrypter') else '' }}"
+              href="{{ url_for('pdf_encrypter') }}"
+              >PDF Encrypter</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/pdf_combiner') else '' }}"
+              href="{{ url_for('pdf_combiner') }}"
+              >PDF Combiner</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
+              href="{{ url_for('yt_vid_downloader') }}"
+              >YouTube Video Downloader</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
+              href="{{ url_for('image_combiner') }}"
+              >Image Combiner</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/image_sketch') else '' }}"
+              href="{{ url_for('image_sketch') }}"
+              >Image to Sketch Converter</a
+            >
+          </li>
+        </ul>
+
+        <div class="text-uppercase text-muted small mb-2">Library</div>
+        <ul class="nav nav-pills flex-column gap-1 mb-3">
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/uploads') else '' }}"
+              href="{{ url_for('uploads_index') }}"
+              >Uploads</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/downloads') else '' }}"
+              href="{{ url_for('downloads_index') }}"
+              >Downloads</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/landing') else '' }}"
+              href="{{ url_for('landing') }}"
+              >Go Back</a
+            >
+          </li>
+        </ul>
+
+        <div class="mt-auto small text-muted">
+          © <span id="year-mobile"></span> evryquiktool
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop/Tablet sidebar (hidden on small screens) -->
     <aside
-      class="sidebar p-3 d-flex flex-column"
+      class="sidebar p-3 d-none d-md-flex flex-column"
       style="width: 280px; border-right: 1px solid #e5e5e5; min-height: 100vh"
     >
       <!-- Top brand -->
@@ -122,49 +244,43 @@
           <a
             class="nav-link {{ 'active' if request.path.startswith('/pdf_decrypter') else '' }}"
             href="{{ url_for('pdf_decrypter') }}"
+            >PDF Decrypter</a
           >
-            PDF Decrypter
-          </a>
         </li>
         <li class="nav-item">
           <a
             class="nav-link {{ 'active' if request.path.startswith('/pdf_encrypter') else '' }}"
             href="{{ url_for('pdf_encrypter') }}"
+            >PDF Encrypter</a
           >
-            PDF Encrypter
-          </a>
         </li>
         <li class="nav-item">
           <a
             class="nav-link {{ 'active' if request.path.startswith('/pdf_combiner') else '' }}"
             href="{{ url_for('pdf_combiner') }}"
+            >PDF Combiner</a
           >
-            PDF Combiner
-          </a>
         </li>
         <li class="nav-item">
           <a
             class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
             href="{{ url_for('yt_vid_downloader') }}"
+            >YouTube Video Downloader</a
           >
-            YouTube Video Downloader
-          </a>
         </li>
         <li class="nav-item">
           <a
             class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
             href="{{ url_for('image_combiner') }}"
+            >Image Combiner</a
           >
-            Image Combiner
-          </a>
         </li>
         <li class="nav-item">
           <a
             class="nav-link {{ 'active' if request.path.startswith('/image_sketch') else '' }}"
             href="{{ url_for('image_sketch') }}"
+            >Image to Sketch Converter</a
           >
-            Image to Sketch Converter
-          </a>
         </li>
       </ul>
 
@@ -179,25 +295,22 @@
             <a
               class="nav-link {{ 'active' if request.path.startswith('/uploads') else '' }}"
               href="{{ url_for('uploads_index') }}"
+              >Uploads</a
             >
-              Uploads
-            </a>
           </li>
           <li class="nav-item">
             <a
               class="nav-link {{ 'active' if request.path.startswith('/downloads') else '' }}"
               href="{{ url_for('downloads_index') }}"
+              >Downloads</a
             >
-              Downloads
-            </a>
           </li>
           <li class="nav-item">
             <a
               class="nav-link {{ 'active' if request.path.startswith('/landing') else '' }}"
               href="{{ url_for('landing') }}"
+              >Go Back</a
             >
-              Go Back
-            </a>
           </li>
         </ul>
         <div class="small text-muted mt-3">
@@ -206,6 +319,7 @@
       </div>
     </aside>
 
+    <!-- Main content -->
     <main class="content-area p-4">
       {% with messages = get_flashed_messages(with_categories=true) %} {% if
       messages %}
@@ -228,12 +342,15 @@
       {% endif %} {% endwith %} {% block content %}{% endblock %}
     </main>
 
+    <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='custom.js') }}"></script>
     <script>
+      // Year stamps
       document.getElementById("year").textContent = new Date().getFullYear();
-    </script>
-    <script>
+      const ym = document.getElementById("year-mobile");
+      if (ym) ym.textContent = new Date().getFullYear();
+
       // Auto-dismiss alerts after 4 seconds
       setTimeout(() => {
         document.querySelectorAll(".alert").forEach((el) => {
@@ -241,6 +358,19 @@
           bsAlert.close();
         });
       }, 4000);
+
+      // Close the offcanvas when a nav link is clicked (mobile)
+      (function () {
+        const offcanvasEl = document.getElementById("mobileMenu");
+        if (!offcanvasEl) return;
+        const oc = bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl);
+        offcanvasEl.querySelectorAll("a.nav-link").forEach((a) => {
+          a.addEventListener("click", () => {
+            // Let navigation happen, but hide the menu immediately for snappy UX
+            oc.hide();
+          });
+        });
+      })();
     </script>
   </body>
 </html>
