@@ -192,7 +192,11 @@
                 <p class="card-text text-muted">
                   Edit the start, end, or remove a video segment.
                 </p>
-                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+                <a
+                  href="{{ url_for('video_cropper') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
               </div>
             </div>
           </div>

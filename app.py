@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import os
+import re
+import shlex
 import subprocess
 import shutil as _shutil
 import numpy as np
@@ -64,21 +66,23 @@ UPLOAD_DIR = BASE / "uploads"
 DOWNLOAD_DIR = BASE / "downloads"
 
 UPLOADS_BY_TOOL = {
-    "image_combiner": UPLOAD_DIR / "image_combiner",
-    "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": UPLOAD_DIR / "pdf_encrypter",
-    "image_sketch": UPLOAD_DIR / "image_sketch",
-    "pdf_combiner": UPLOAD_DIR / "pdf_combiner",    
+    "pdf_combiner": UPLOAD_DIR / "pdf_combiner",  
+    "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
+    "video_cropper": UPLOAD_DIR / "video_cropper",
+    "image_combiner": UPLOAD_DIR / "image_combiner",
+    "image_sketch": UPLOAD_DIR / "image_sketch",  
 }
 
 DOWNLOADS_BY_TOOL = {
-    "image_combiner": DOWNLOAD_DIR / "image_combiner",
-    "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": DOWNLOAD_DIR / "pdf_encrypter",
-    "image_sketch": DOWNLOAD_DIR / "image_sketch",
-    "pdf_combiner": DOWNLOAD_DIR / "pdf_combiner",    
+    "pdf_combiner": DOWNLOAD_DIR / "pdf_combiner",  
+    "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
+    "video_cropper": DOWNLOAD_DIR / "video_cropper", 
+    "image_combiner": DOWNLOAD_DIR / "image_combiner",
+    "image_sketch": DOWNLOAD_DIR / "image_sketch",  
 }
 
 # Ensure folders exist
@@ -87,6 +91,7 @@ for p in [UPLOAD_DIR, DOWNLOAD_DIR, *UPLOADS_BY_TOOL.values(), *DOWNLOADS_BY_TOO
 
 ALLOWED_PDF_EXT = {".pdf"}
 ALLOWED_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 MAX_FILES = 10
 
 
@@ -916,29 +921,181 @@ def image_sketch():
     return render_template("image_sketch.html", error=error, message=message, counts=counts)
 
 
+def _is_allowed_video(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_VIDEO_EXTS
+
+_time_re = re.compile(
+    r"""^\s*
+    (?:
+      (?:(\d+):)?        # hours (optional)
+      (?:(\d{1,2}):)?    # minutes (optional)
+      (\d+(?:\.\d+)?)    # seconds (required, may be float)
+    )
+    \s*$""",
+    re.X,
+)
+
+def parse_timecode(s: str) -> float:
+    """
+    Accepts SS, MM:SS, or HH:MM:SS(.ms) and returns seconds as float.
+    Examples: '21' -> 21.0; '1:05' -> 65.0; '00:01:05.5' -> 65.5
+    """
+    s = s.strip()
+    if not s:
+        raise ValueError("Empty timecode")
+    parts = s.split(":")
+    if len(parts) == 1:
+        return float(parts[0])
+    elif len(parts) == 2:
+        m, sec = parts
+        return int(m) * 60 + float(sec)
+    elif len(parts) == 3:
+        h, m, sec = parts
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+    else:
+        m = _time_re.match(s)
+        if m:
+            h = int(m.group(1) or 0)
+            mm = int(m.group(2) or 0)
+            ss = float(m.group(3))
+            return h * 3600 + mm * 60 + ss
+        raise ValueError(f"Invalid time format: {s}")
+
+def ffprobe_duration_seconds(in_path: Path) -> float:
+    """
+    Returns media duration in seconds using ffprobe.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(in_path),
+    ]
+    out = subprocess.check_output(cmd, text=True).strip()
+    return float(out)
+
+def remove_segment_with_concat(in_path: Path, start_s: float, end_s: float, out_path: Path) -> None:
+    """
+    Robust approach that re-encodes using filter_complex:
+      - Create two segments: [0, start) and (end, EOF]
+      - Concat them back together.
+    This is resilient to keyframe boundaries and mixed codecs/containers.
+    """
+    # Build filter graph
+    filter_graph = (
+        f"[0:v]trim=end={start_s},setpts=PTS-STARTPTS[v0];"
+        f"[0:a]atrim=end={start_s},asetpts=PTS-STARTPTS[a0];"
+        f"[0:v]trim=start={end_s},setpts=PTS-STARTPTS[v1];"
+        f"[0:a]atrim=start={end_s},asetpts=PTS-STARTPTS[a1];"
+        f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(in_path),
+        "-filter_complex", filter_graph,
+        "-map", "[v]",
+        "-map", "[a]",
+        "-c:v", "libx264",          # re-encode for compatibility
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        "-preset", "veryfast",
+        "-crf", "20",
+        str(out_path),
+    ]
+    subprocess.check_call(cmd)
+
+@app.route("/video_cropper", methods=["GET", "POST"])
+def video_cropper():
+    if request.method == "GET":
+        return render_template("video_cropper.html")
+
+    # POST
+    file = request.files.get("video")
+    start_time = (request.form.get("start_time") or "").strip()
+    end_time = (request.form.get("end_time") or "").strip()
+    output_name = (request.form.get("output_name") or "").strip()
+
+    if not file or file.filename == "":
+        return render_template("video_cropper.html", error="Please choose a video file.")
+
+    if not _is_allowed_video(file.filename):
+        return render_template("video_cropper.html", error="Unsupported video type.")
+
+    try:
+        start_s = parse_timecode(start_time)
+        end_s = parse_timecode(end_time)
+    except ValueError as e:
+        return render_template("video_cropper.html", error=str(e))
+
+    if end_s <= start_s:
+        return render_template("video_cropper.html", error="End time must be greater than start time.")
+
+    # Save upload
+    original_name = secure_filename(file.filename)
+    upload_path = UPLOAD_DIR / "video_cropper" / original_name
+    file.save(upload_path)  # <-- uploaded video saved to uploads/
+
+    # Validate against duration
+    try:
+        dur = ffprobe_duration_seconds(upload_path)
+    except Exception:
+        dur = None
+    if dur is not None and (start_s < 0 or end_s > dur):
+        return render_template("video_cropper.html", error=f"Times must be within video duration ({dur:.2f}s).")
+
+    # Build output name/path
+    stem = Path(original_name).stem
+    ext = ".mp4"  # Normalize to mp4 for compatibility
+    if output_name:
+        out_name = secure_filename(output_name)
+        if not Path(out_name).suffix:
+            out_name += ext
+    else:
+        # Example: myclip_cropped_0.0-21.0_20250923-130501.mp4
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_name = f"{stem}_cropped_{start_s:g}-{end_s:g}_{ts}{ext}"
+
+    out_path = DOWNLOAD_DIR / "video_cropper" / out_name
+
+    try:
+        remove_segment_with_concat(upload_path, start_s, end_s, out_path)
+    except subprocess.CalledProcessError as e:
+        return render_template("video_cropper.html", error=f"ffmpeg failed: {e}")
+    except Exception as e:
+        return render_template("video_cropper.html", error=str(e))
+
+    # Success: serve file as download and also leave it in downloads/
+    return send_file(out_path, as_attachment=True, download_name=out_name)
+
+
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
 # -------------------------
 def _count_dict():
     return {
-        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
-        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
-        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
     }
 
 
 @app.route("/uploads")
 def uploads_index():
     counts = {
-        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
-        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
-        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
+        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
+        "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
+        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
+        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -950,12 +1107,13 @@ def uploads_tool(tool):
         return redirect(url_for("uploads_index"))
     files = list_files(UPLOADS_BY_TOOL[tool])
     counts = {
-        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
-        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
-        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
+        "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
+        "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
+        "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
+        "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -994,12 +1152,13 @@ def del_upload(tool, filename):
 @app.route("/downloads")
 def downloads_index():
     counts = {
-        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
-        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
-        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1011,12 +1170,13 @@ def downloads_tool(tool):
         return redirect(url_for("downloads_index"))
     files = list_files(DOWNLOADS_BY_TOOL[tool])
     counts = {
-        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
-        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
-        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
+        "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
+        "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 

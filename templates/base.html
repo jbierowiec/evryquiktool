@@ -196,6 +196,13 @@
           </li>
           <li class="nav-item">
             <a
+              class="nav-link {{ 'active' if request.path.startswith('/video_cropper') else '' }}"
+              href="{{ url_for('video_cropper') }}"
+              >Video Time Crop Editor</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
               class="nav-link {{ 'active' if request.path.startswith('/image_combiner') else '' }}"
               href="{{ url_for('image_combiner') }}"
               >Image Combiner</a
@@ -280,6 +287,13 @@
             class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
             href="{{ url_for('yt_vid_downloader') }}"
             >YouTube Video Downloader</a
+          >
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/video_cropper') else '' }}"
+            href="{{ url_for('video_cropper') }}"
+            >Video Time Crop Editor</a
           >
         </li>
         <li class="nav-item">

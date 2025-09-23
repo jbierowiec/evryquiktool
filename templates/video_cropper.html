@@ -1,0 +1,88 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">Video Cropper — Remove a Time Segment</h3>
+  <p class="text-muted">
+    Upload a video, then enter the <strong>start</strong> and
+    <strong>end</strong> of the segment you want to remove. The output will be
+    the original video with that segment cut out.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="mb-4">
+    <div class="mb-3">
+      <label class="form-label">Video file</label>
+      <input
+        class="form-control"
+        type="file"
+        name="video"
+        accept="video/*"
+        required
+      />
+      <div class="form-text">Common types: MP4, MOV, MKV, WEBM, AVI…</div>
+    </div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-sm-6">
+        <label class="form-label">Start time of segment to remove</label>
+        <input
+          type="text"
+          class="form-control"
+          name="start_time"
+          placeholder="e.g. 21 or 00:00:21.000"
+          required
+        />
+        <div class="form-text">
+          Accepts <code>SS</code>, <code>MM:SS</code>, or
+          <code>HH:MM:SS(.ms)</code>.
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <label class="form-label">End time of segment to remove</label>
+        <input
+          type="text"
+          class="form-control"
+          name="end_time"
+          placeholder="e.g. 00:01:05.5"
+          required
+        />
+        <div class="form-text">
+          Must be greater than start time and within the video duration.
+        </div>
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Output file name (optional)</label>
+      <input
+        type="text"
+        class="form-control"
+        name="output_name"
+        placeholder="my_video_without_intro.mp4"
+      />
+      <div class="form-text">
+        If you leave this blank, we’ll create a sensible name for you.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Create Cropped Video</button>
+  </form>
+
+  <hr />
+  <h6>Tips</h6>
+  <ul>
+    <li>
+      Example: to remove the first 21 seconds of a 4:23 video, set start =
+      <code>0:00</code> and end = <code>0:21</code>.
+    </li>
+    <li>
+      You can remove any middle part (e.g., ads or dead time) by setting
+      start/end around that segment.
+    </li>
+  </ul>
+</div>
+{% endblock %}
