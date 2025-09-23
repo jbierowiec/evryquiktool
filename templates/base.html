@@ -18,7 +18,8 @@
       body {
         min-height: 100vh;
       }
-      /* Desktop/tablet sidebar */
+
+      /* Sidebar styling (unchanged from your base) */
       .sidebar {
         width: 280px;
         border-right: 1px solid #e5e5e5;
@@ -37,7 +38,7 @@
         color: #000 !important;
       }
       .sidebar .nav-link.active {
-        background-color: #0d6efd;
+        background-color: #0d6efd; /* Bootstrap primary */
         color: #fff !important;
       }
       .brand {
@@ -48,14 +49,18 @@
         flex: 1;
       }
 
-      /* Mobile navbar spacing so content isn't hidden behind it */
-      @media (max-width: 767.98px) {
-        main.content-area {
-          padding-top: 0.5rem;
-        }
+      /* Utility styles you use in Uploads/Downloads pages */
+      .file-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
       }
 
-      /* Buttons niceties (unchanged) */
+      /* Buttons niceties & mini action row */
       .btn {
         border-radius: 0.4rem !important;
         transition: all 0.2s ease-in-out;
@@ -105,24 +110,30 @@
         transform: translateY(-1px);
         box-shadow: 0 0.4rem 0.9rem rgba(0, 0, 0, 0.12);
       }
+
+      /* Mobile spacing so content isn't hidden by top bar */
+      @media (max-width: 767.98px) {
+        main.content-area {
+          padding-top: 0.5rem;
+        }
+      }
     </style>
   </head>
-  <!-- 👇 change is here: added align-items-start -->
+
+  <!-- Keep align-items-start so the sidebar hugs the top -->
   <body class="d-flex align-items-start">
-    <!-- Mobile top bar (visible only on small screens) -->
+    <!-- Mobile top bar (hamburger to open offcanvas) -->
     <nav
       class="navbar navbar-light bg-body-tertiary border-bottom d-md-none sticky-top"
     >
       <div
         class="container-fluid d-flex justify-content-between align-items-center"
       >
-        <!-- Brand (left side) -->
-        <!--
+        <!-- If you want a visible brand on mobile, uncomment:
         <a class="navbar-brand fw-bold mb-0 h5" href="{{ url_for('landing') }}">
           Tools
         </a>
         -->
-        <!-- Hamburger (right side) -->
         <button
           class="navbar-toggler"
           type="button"
@@ -199,6 +210,7 @@
           </li>
         </ul>
 
+        <!-- Library (Uploads/Downloads/Go Back) preserved exactly -->
         <div class="text-uppercase text-muted small mb-2">Library</div>
         <ul class="nav nav-pills flex-column gap-1 mb-3">
           <li class="nav-item">
@@ -230,7 +242,7 @@
       </div>
     </div>
 
-    <!-- Desktop/Tablet sidebar (hidden on small screens) -->
+    <!-- Desktop/Tablet sidebar -->
     <aside
       class="sidebar p-3 d-none d-md-flex flex-column"
       style="width: 280px; border-right: 1px solid #e5e5e5; min-height: 100vh"
@@ -286,10 +298,10 @@
         </li>
       </ul>
 
-      <!-- This spacer pushes the Library to the bottom -->
+      <!-- Spacer pushes Library to the bottom -->
       <div class="flex-grow-1"></div>
 
-      <!-- Library at the bottom -->
+      <!-- Library section preserved exactly -->
       <div class="mt-auto">
         <div class="text-uppercase text-muted small mb-2">Library</div>
         <ul class="nav nav-pills flex-column gap-1">
@@ -349,7 +361,8 @@
     <script src="{{ url_for('static', filename='custom.js') }}"></script>
     <script>
       // Year stamps
-      document.getElementById("year").textContent = new Date().getFullYear();
+      const y = document.getElementById("year");
+      if (y) y.textContent = new Date().getFullYear();
       const ym = document.getElementById("year-mobile");
       if (ym) ym.textContent = new Date().getFullYear();
 
@@ -367,10 +380,7 @@
         if (!offcanvasEl) return;
         const oc = bootstrap.Offcanvas.getOrCreateInstance(offcanvasEl);
         offcanvasEl.querySelectorAll("a.nav-link").forEach((a) => {
-          a.addEventListener("click", () => {
-            // Let navigation happen, but hide the menu immediately for snappy UX
-            oc.hide();
-          });
+          a.addEventListener("click", () => oc.hide());
         });
       })();
     </script>
