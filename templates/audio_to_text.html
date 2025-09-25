@@ -1,5 +1,4 @@
-{% extends "base.html" %}
-{% block content %}
+{% extends "base.html" %} {% block content %}
 <div class="container py-4">
   <h3 class="mb-3">Audio to Text Transciber</h3>
   <p class="text-muted">
@@ -7,19 +6,32 @@
     transcribe it, and generate a PDF with one line per second.
   </p>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, msg in messages %}
-        <div class="alert alert-{{ category }}">{% autoescape false %}{{ msg }}{% endautoescape %}</div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
+  <h6>Tips</h6>
+  <ul>
+    <li>We group words to their nearest whole second using word timestamps.</li>
+    <li>Try <em>small</em> first for a quick pass; bump up if needed.</li>
+  </ul>
+
+  {% with messages = get_flashed_messages(with_categories=true) %} {% if
+  messages %} {% for category, msg in messages %}
+  <div class="alert alert-{{ category }}">
+    {% autoescape false %}{{ msg }}{% endautoescape %}
+  </div>
+  {% endfor %} {% endif %} {% endwith %}
 
   <form method="post" enctype="multipart/form-data" class="mb-4">
     <div class="mb-3">
       <label class="form-label">Audio/Video file</label>
-      <input class="form-control" type="file" name="media" accept="audio/*,video/*" required />
-      <div class="form-text">Common types: MP3, WAV, M4A, MP4, MOV, MKV, WEBM…</div>
+      <input
+        class="form-control"
+        type="file"
+        name="media"
+        accept="audio/*,video/*"
+        required
+      />
+      <div class="form-text">
+        Common types: MP3, WAV, M4A, MP4, MOV, MKV, WEBM…
+      </div>
     </div>
 
     <div class="row g-3 mb-3">
@@ -36,7 +48,12 @@
       </div>
       <div class="col-sm-6">
         <div class="form-check mt-4">
-          <input class="form-check-input" type="checkbox" name="translate" id="translate">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            name="translate"
+            id="translate"
+          />
           <label class="form-check-label" for="translate">
             Translate non-English to English (optional)
           </label>
@@ -46,66 +63,72 @@
 
     <div class="mb-3">
       <label class="form-label">Custom output name (optional)</label>
-      <input type="text" class="form-control" name="output_name" placeholder="my_transcript.pdf" />
+      <input
+        type="text"
+        class="form-control"
+        name="output_name"
+        placeholder="my_transcript.pdf"
+      />
     </div>
 
     <button class="btn btn-primary" type="submit">Transcribe to PDF</button>
+    <hr />
   </form>
-
-  <hr />
-  <h6>Notes</h6>
-  <ul>
-    <li>We group words to their nearest whole second using word timestamps.</li>
-    <li>Try <em>small</em> first for a quick pass; bump up if needed.</li>
-  </ul>
 </div>
 
 <script>
-(function () {
-  const form = document.querySelector('form');
-  if (!form) return;
+  (function () {
+    const form = document.querySelector("form");
+    if (!form) return;
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
 
-    const btn = form.querySelector('button[type="submit"]');
-    const originalText = btn ? btn.textContent : null;
-    if (btn) { btn.disabled = true; btn.textContent = 'Transcribing…'; }
+      const btn = form.querySelector('button[type="submit"]');
+      const originalText = btn ? btn.textContent : null;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Transcribing…";
+      }
 
-    try {
-      const fd = new FormData(form);
-      const res = await fetch('{{ url_for("audio_to_text") }}', {
-        method: 'POST',
-        body: fd,
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
+      try {
+        const fd = new FormData(form);
+        const res = await fetch('{{ url_for("audio_to_text") }}', {
+          method: "POST",
+          body: fd,
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
 
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Transcription failed.');
+        const data = await res.json();
+        if (!res.ok || !data.ok)
+          throw new Error(data.error || "Transcription failed.");
 
-      // Fetch the generated PDF, then trigger a save dialog without leaving the page
-      const fileRes = await fetch(data.download_url);
-      if (!fileRes.ok) throw new Error('Could not fetch the PDF.');
-      const blob = await fileRes.blob();
+        // Fetch the generated PDF, then trigger a save dialog without leaving the page
+        const fileRes = await fetch(data.download_url);
+        if (!fileRes.ok) throw new Error("Could not fetch the PDF.");
+        const blob = await fileRes.blob();
 
-      const a = document.createElement('a');
-      const url = URL.createObjectURL(blob);
-      a.href = url;
-      a.download = data.filename; // suggests the filename to the browser
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+        const a = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = data.filename; // suggests the filename to the browser
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-      // Optional: update a count pill on the page if you have one
-      const pill = document.getElementById('downloads-count-audio_to_text');
-      if (pill) pill.textContent = data.counts.audio_to_text_downloads;
-    } catch (err) {
-      alert(err.message || 'Something went wrong.');
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = originalText; }
-    }
-  });
-})();
+        // Optional: update a count pill on the page if you have one
+        const pill = document.getElementById("downloads-count-audio_to_text");
+        if (pill) pill.textContent = data.counts.audio_to_text_downloads;
+      } catch (err) {
+        alert(err.message || "Something went wrong.");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      }
+    });
+  })();
 </script>
 {% endblock %}
