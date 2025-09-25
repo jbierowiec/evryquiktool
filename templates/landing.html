@@ -208,7 +208,11 @@
                 <p class="card-text text-muted">
                   Upload any audio file, and extract the text from it.
                 </p>
-                <button class="btn btn-primary btn-sm" disabled>Soon</button>
+                <a
+                  href="{{ url_for('audio_to_text') }}"
+                  class="btn btn-primary btn-sm"
+                  >Open</a
+                >
               </div>
             </div>
           </div>

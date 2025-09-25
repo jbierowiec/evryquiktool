@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import math
 import shlex
 import subprocess
 import shutil as _shutil
@@ -15,7 +16,7 @@ from shutil import which as sh_which
 from werkzeug.utils import secure_filename
 from PIL import Image, ImageOps, ImageFilter
 from flask import (
-    Flask, render_template, request, redirect, url_for,
+    Flask, jsonify, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, 
 )
 
@@ -73,6 +74,7 @@ UPLOADS_BY_TOOL = {
     "video_cropper": UPLOAD_DIR / "video_cropper",
     "image_combiner": UPLOAD_DIR / "image_combiner",
     "image_sketch": UPLOAD_DIR / "image_sketch",  
+    "audio_to_text": UPLOAD_DIR / "audio_to_text",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -83,6 +85,7 @@ DOWNLOADS_BY_TOOL = {
     "video_cropper": DOWNLOAD_DIR / "video_cropper", 
     "image_combiner": DOWNLOAD_DIR / "image_combiner",
     "image_sketch": DOWNLOAD_DIR / "image_sketch",  
+    "audio_to_text": DOWNLOAD_DIR / "audio_to_text",  
 }
 
 # Ensure folders exist
@@ -93,6 +96,10 @@ ALLOWED_PDF_EXT = {".pdf"}
 ALLOWED_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 MAX_FILES = 10
+ALLOWED_MEDIA_EXTS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma", ".amr",
+    ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"
+}
 
 
 # -------------------------
@@ -1071,6 +1078,180 @@ def video_cropper():
     return send_file(out_path, as_attachment=True, download_name=out_name)
 
 
+def _is_allowed_media(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_MEDIA_EXTS
+
+def _s_to_hms(sec: int) -> str:
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+@app.route("/audio_to_text", methods=["GET", "POST"])
+def audio_to_text():
+    if request.method == "GET":
+        return render_template("audio_to_text.html")
+
+    # Detect AJAX (fetch) vs classic form submit
+    is_xhr = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    # POST
+    f = request.files.get("media")
+    if not f or not f.filename:
+        msg = "Please choose an audio/video file."
+        if is_xhr:
+            return jsonify(ok=False, error=msg), 400
+        flash(msg, "danger")
+        return redirect(request.url)
+
+    if not _is_allowed_media(f.filename):
+        msg = "Unsupported file type."
+        if is_xhr:
+            return jsonify(ok=False, error=msg), 400
+        flash(msg, "danger")
+        return redirect(request.url)
+
+    model_size = request.form.get("model_size", "small")
+    translate = bool(request.form.get("translate"))
+    output_name = (request.form.get("output_name") or "").strip()
+
+    # Save upload
+    safe_name = secure_filename(f.filename)
+    in_path = (UPLOADS_BY_TOOL["audio_to_text"] / safe_name).resolve()
+    f.save(in_path)
+
+    # --- Transcribe with faster-whisper ---
+    try:
+        from faster_whisper import WhisperModel
+    except Exception:
+        msg = "Server missing dependency: faster-whisper. Add it to requirements.txt."
+        if is_xhr:
+            return jsonify(ok=False, error=msg), 500
+        flash(msg, "danger")
+        return redirect(request.url)
+
+    # Prefer GPU if available (toggle via env); else CPU
+    compute_type = "int8_float16" if os.getenv("WHISPER_INT8", "0") == "1" else "float16"
+    try:
+        model = WhisperModel(
+            model_size,
+            device="cuda" if os.getenv("WHISPER_CUDA", "0") == "1" else "cpu",
+            compute_type=compute_type
+        )
+    except Exception:
+        model = WhisperModel(model_size, device="cpu", compute_type="float32")
+
+    segments, info = model.transcribe(
+        str(in_path),
+        language=None,  # auto-detect
+        task="translate" if translate else "transcribe",
+        vad_filter=True,
+        word_timestamps=True,
+        beam_size=5,
+    )
+
+    # Build per-second bins from word timestamps
+    second_map = {}   # int second -> list[str]
+    detected_lang = getattr(info, "language", None)
+
+    for seg in segments:
+        if not getattr(seg, "words", None):
+            sec = int(math.floor(seg.start)) if seg.start is not None else 0
+            second_map.setdefault(sec, []).append(seg.text.strip())
+            continue
+
+        for w in seg.words:
+            if w.start is None or not w.word:
+                continue
+            sec = int(math.floor(w.start))
+            second_map.setdefault(sec, []).append(w.word)
+
+    if not second_map:
+        msg = "No speech detected."
+        if is_xhr:
+            return jsonify(ok=False, error=msg), 200
+        flash(msg, "warning")
+        return redirect(request.url)
+
+    # Assemble lines: "HH:MM:SS  text"
+    max_second = max(second_map.keys())
+    lines = []
+    for s in range(0, max_second + 1):
+        words = second_map.get(s, [])
+        if not words:
+            continue
+        text = " ".join(words)
+        text = (text.replace(" ,", ",").replace(" .", ".")
+                    .replace(" !", "!").replace(" ?", "?")
+                    .replace(" :", ":").replace(" ;", ";"))
+        lines.append(f"{_s_to_hms(s)}  {text.strip()}")
+
+    # --- Write PDF to the tool's downloads folder ---
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import inch
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if output_name and not output_name.lower().endswith(".pdf"):
+        output_name += ".pdf"
+    out_pdf = (DOWNLOADS_BY_TOOL["audio_to_text"]
+               / (output_name or f"{in_path.stem}_transcript_{ts}.pdf")).resolve()
+
+    # Try a monospaced font; fallback to Helvetica
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVuSansMono",
+                                       "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
+        font_name = "DejaVuSansMono"
+    except Exception:
+        font_name = "Helvetica"
+
+    c = canvas.Canvas(str(out_pdf), pagesize=letter)
+    width, height = letter
+    margin = 0.75 * inch
+    y = height - margin
+
+    input_filename = in_path.name
+    title = f"Second-by-Second Transcript — {input_filename} ({detected_lang or 'auto'})"
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(margin, y, title)
+    y -= 0.4 * inch
+
+    c.setFont(font_name, 10)
+    line_height = 13
+    for line in lines:
+        if y < margin:
+            c.showPage()
+            y = height - margin
+            c.setFont(font_name, 10)
+        c.drawString(margin, y, line)
+        y -= line_height
+
+    c.showPage()
+    c.save()
+
+    # Direct download behavior
+    download_url = url_for("dl_download", tool="audio_to_text", filename=out_pdf.name)
+
+    if is_xhr:
+        # Return JSON so the page can stay put and JS can trigger a download + update counts
+        return jsonify({
+            "ok": True,
+            "download_url": download_url,
+            "filename": out_pdf.name,
+            "counts": {
+                "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"]))
+            }
+        })
+
+    # Non-AJAX: stream file as attachment immediately (browser saves to user's default location)
+    return send_from_directory(DOWNLOADS_BY_TOOL["audio_to_text"], out_pdf.name, as_attachment=True)
+
+
+
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
 # -------------------------
@@ -1083,6 +1264,7 @@ def _count_dict():
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
     }
 
 
@@ -1096,6 +1278,7 @@ def uploads_index():
         "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
+        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1114,6 +1297,7 @@ def uploads_tool(tool):
         "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
+        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1159,6 +1343,7 @@ def downloads_index():
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1177,6 +1362,7 @@ def downloads_tool(tool):
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 
