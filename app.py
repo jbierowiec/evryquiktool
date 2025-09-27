@@ -4,13 +4,14 @@ import io
 import os
 import re
 import math
+import uuid
 import shlex
 import subprocess
 import shutil as _shutil
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from shutil import which as sh_which
 
 from werkzeug.utils import secure_filename
@@ -38,6 +39,12 @@ try:
     _HAS_PYPDF2 = True
 except Exception:
     _HAS_PYPDF2 = False
+
+try:
+    from rembg import remove as rembg_remove  # pip install rembg
+    _HAS_REMBG = True
+except Exception:
+    _HAS_REMBG = False
 
 
 # Make imageio-ffmpeg's bundled ffmpeg visible (works on Railway too)
@@ -72,9 +79,10 @@ UPLOADS_BY_TOOL = {
     "pdf_combiner": UPLOAD_DIR / "pdf_combiner",  
     "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
     "video_cropper": UPLOAD_DIR / "video_cropper",
+    "audio_to_text": UPLOAD_DIR / "audio_to_text",  
     "image_combiner": UPLOAD_DIR / "image_combiner",
     "image_sketch": UPLOAD_DIR / "image_sketch",  
-    "audio_to_text": UPLOAD_DIR / "audio_to_text",  
+    "image_background_remover": UPLOAD_DIR / "image_background_remover",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -83,9 +91,10 @@ DOWNLOADS_BY_TOOL = {
     "pdf_combiner": DOWNLOAD_DIR / "pdf_combiner",  
     "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "video_cropper": DOWNLOAD_DIR / "video_cropper", 
+    "audio_to_text": DOWNLOAD_DIR / "audio_to_text", 
     "image_combiner": DOWNLOAD_DIR / "image_combiner",
-    "image_sketch": DOWNLOAD_DIR / "image_sketch",  
-    "audio_to_text": DOWNLOAD_DIR / "audio_to_text",  
+    "image_sketch": DOWNLOAD_DIR / "image_sketch",   
+    "image_background_remover": DOWNLOAD_DIR / "image_background_remover",  
 }
 
 # Ensure folders exist
@@ -291,6 +300,7 @@ def _has_video_stream(path: Path) -> bool:
     except Exception:
         return True
 
+
 @app.route("/yt_vid_downloader", methods=["GET", "POST"])
 def yt_vid_downloader():
     """Download a YouTube URL as MP4 (video) or MP3 (audio-only) and auto-send to browser."""
@@ -445,17 +455,21 @@ def yt_vid_downloader():
 # configure max upload size (optional)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
 
+
 # Allowed extension helper
 def allowed_file(filename):
     return '.' in filename and filename.lower().rsplit('.', 1)[1] == 'pdf'
+
 
 def ensure_dirs(*dirs: Path):
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
 
+
 def tool_dirs(tool: str):
     """Return (uploads_subdir, downloads_subdir) for a tool key."""
     return (UPLOAD_DIR / tool, DOWNLOAD_DIR / tool)
+
 
 def ts_name(name: str) -> str:
     return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}__{name}"
@@ -688,6 +702,7 @@ def pdf_encrypter():
 def _is_pdf(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_PDF_EXT
 
+
 def _safe_output_name(name: str) -> str:
     """
     Normalize the output file name, enforcing .pdf extension and a reasonable base.
@@ -799,8 +814,10 @@ def _ensure_tool_dirs(tool_key: str) -> tuple[Path, Path]:
     down.mkdir(parents=True, exist_ok=True)
     return up, down
 
+
 def _is_allowed_image(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
+
 
 def image_to_sketch(in_path: Path, out_path: Path, blur_radius: int = 15, boost_contrast: bool = False) -> None:
     """
@@ -942,6 +959,7 @@ _time_re = re.compile(
     re.X,
 )
 
+
 def parse_timecode(s: str) -> float:
     """
     Accepts SS, MM:SS, or HH:MM:SS(.ms) and returns seconds as float.
@@ -968,6 +986,7 @@ def parse_timecode(s: str) -> float:
             return h * 3600 + mm * 60 + ss
         raise ValueError(f"Invalid time format: {s}")
 
+
 def ffprobe_duration_seconds(in_path: Path) -> float:
     """
     Returns media duration in seconds using ffprobe.
@@ -981,6 +1000,7 @@ def ffprobe_duration_seconds(in_path: Path) -> float:
     ]
     out = subprocess.check_output(cmd, text=True).strip()
     return float(out)
+
 
 def remove_segment_with_concat(in_path: Path, start_s: float, end_s: float, out_path: Path) -> None:
     """
@@ -1013,6 +1033,7 @@ def remove_segment_with_concat(in_path: Path, start_s: float, end_s: float, out_
         str(out_path),
     ]
     subprocess.check_call(cmd)
+
 
 @app.route("/video_cropper", methods=["GET", "POST"])
 def video_cropper():
@@ -1081,6 +1102,7 @@ def video_cropper():
 def _is_allowed_media(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_MEDIA_EXTS
 
+
 def _s_to_hms(sec: int) -> str:
     h = sec // 3600
     m = (sec % 3600) // 60
@@ -1088,6 +1110,7 @@ def _s_to_hms(sec: int) -> str:
     if h:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
+
 
 @app.route("/audio_to_text", methods=["GET", "POST"])
 def audio_to_text():
@@ -1251,6 +1274,186 @@ def audio_to_text():
     return send_from_directory(DOWNLOADS_BY_TOOL["audio_to_text"], out_pdf.name, as_attachment=True)
 
 
+# --- add near your other constants ---
+TOOL_KEY = "image_background_remover"
+TOOL_UPLOAD_DIR = UPLOAD_DIR / TOOL_KEY
+TOOL_DOWNLOAD_DIR = DOWNLOAD_DIR / TOOL_KEY
+TOOL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+TOOL_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_allowed_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
+
+
+# -----------------------
+# Utilities
+# -----------------------
+def _safe_png_name(orig_name: str, override: Optional[str]) -> str:
+    """
+    Build output filename (always .png).
+    If override provided, ensure it ends with .png.
+    Otherwise use <basename>_no-bg.png
+    """
+    if override:
+        name = override.strip()
+        if not name.lower().endswith(".png"):
+            name += ".png"
+        return secure_filename(name)
+
+    base = Path(secure_filename(orig_name)).stem
+    return f"{base}_no-bg.png"
+
+
+def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+    """
+    Convert '#RRGGBB' or 'RRGGBB' to (R,G,B).
+    """
+    s = hex_color.strip().lstrip("#")
+    if len(s) != 6:
+        # default to white if malformed
+        return (255, 255, 255)
+    r = int(s[0:2], 16)
+    g = int(s[2:4], 16)
+    b = int(s[4:6], 16)
+    return (r, g, b)
+
+
+def remove_background_chroma(
+    im: Image.Image,
+    bg_rgb: Tuple[int, int, int],
+    tol: int = 25,
+    feather: bool = False
+) -> Image.Image:
+    """
+    Remove pixels near 'bg_rgb' with tolerance 'tol'.
+    Returns RGBA image with transparency where removed.
+    """
+    # Ensure RGB for distance math
+    rgb = im.convert("RGB")
+    arr = np.asarray(rgb, dtype=np.int16)  # H,W,3
+    br, bg, bb = bg_rgb
+
+    # Euclidean distance to background color
+    dist = np.sqrt(
+        (arr[..., 0] - br) ** 2 +
+        (arr[..., 1] - bg) ** 2 +
+        (arr[..., 2] - bb) ** 2
+    )
+
+    # Build mask: 255 where background, else 0
+    mask = (dist <= max(0, int(tol))).astype(np.uint8) * 255
+    mask_img = Image.fromarray(mask, mode="L")
+
+    if feather:
+        # soften edges
+        mask_img = mask_img.filter(ImageFilter.GaussianBlur(radius=2))
+
+    # Alpha = 255 - mask (remove bg -> alpha=0)
+    alpha = ImageOps.invert(mask_img)
+
+    rgba = rgb.copy()
+    rgba.putalpha(alpha)
+    return rgba
+
+
+def remove_background_auto(im: Image.Image, feather: bool = False) -> Image.Image:
+    """
+    ML-based background removal via rembg (U^2-Net).
+    Returns RGBA.
+    """
+    if not _HAS_REMBG:
+        raise RuntimeError(
+            "Auto mode requires 'rembg' (pip install rembg). "
+            "Switch to 'Chroma key' in the form if you prefer not to install it."
+        )
+
+    arr = np.asarray(im.convert("RGBA"))
+    out = rembg_remove(arr)
+    rgba = Image.fromarray(out, mode="RGBA")
+
+    if feather:
+        # a gentle alpha blur on edges
+        a = rgba.split()[-1]
+        a = a.filter(ImageFilter.GaussianBlur(radius=1.2))
+        rgba.putalpha(a)
+    return rgba
+
+
+# -----------------------
+# Routes
+# -----------------------
+@app.route("/downloads/<path:filename>")
+def serve_download(filename):
+    # Serves files from downloads/ for direct link in the template
+    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
+
+
+@app.route("/image_background_remover", methods=["GET", "POST"])
+def image_background_remover():
+    """
+    GET: render the form
+    POST: save original -> uploads/<tool>/ ; process ; save PNG -> downloads/<tool>/
+          then AUTO-DOWNLOAD the new PNG (as attachment)
+    """
+    if request.method == "GET":
+        # plain render (no success flash/link)
+        return render_template("image_background_remover.html")
+
+    # ---- POST ----
+    f = request.files.get("image_file")
+    if not f or not f.filename:
+        return render_template("image_background_remover.html",
+                               error="Please choose an image file.")
+
+    if not _is_allowed_image(f.filename):
+        return render_template("image_background_remover.html",
+                               error="Unsupported image format. Use PNG, JPG, JPEG, WEBP, or BMP.")
+
+    # Save original to uploads/<tool> (prefix with short uuid to avoid collisions)
+    from werkzeug.utils import secure_filename
+    import uuid
+    orig_name = secure_filename(f.filename)
+    up_name = f"{uuid.uuid4().hex[:8]}_{orig_name}"
+    up_path = TOOL_UPLOAD_DIR / up_name
+    f.save(up_path)
+
+    # Read options
+    output_name = _safe_png_name(orig_name, request.form.get("output_name"))
+    method = (request.form.get("method") or "auto").lower().strip()
+    feather_edges = bool(request.form.get("feather_edges"))
+
+    # Process
+    try:
+        from PIL import Image
+        with Image.open(up_path) as im:
+            if method == "chroma":
+                hex_color = request.form.get("chroma_color", "#ffffff")
+                tol = int(request.form.get("chroma_tol", "25") or "25")
+                out_im = remove_background_chroma(
+                    im, bg_rgb=_hex_to_rgb(hex_color), tol=tol, feather=feather_edges
+                )
+            else:
+                out_im = remove_background_auto(im, feather=feather_edges)
+
+            out_im = out_im.convert("RGBA")
+
+        # Save to downloads/<tool>
+        out_name = f"{uuid.uuid4().hex[:6]}_{output_name}"
+        out_path = TOOL_DOWNLOAD_DIR / out_name
+        out_im.save(out_path, format="PNG")
+
+    except RuntimeError as e:
+        # e.g., 'rembg' not installed for Auto mode
+        return render_template("image_background_remover.html", error=str(e))
+    except Exception as e:
+        return render_template("image_background_remover.html", error=f"Failed to process image: {e}")
+
+    # ---- AUTO-DOWNLOAD ----
+    # Return the file directly so the browser downloads it without showing a success flash.
+    # Also increments your Downloads counter because it now exists under downloads/<tool>.
+    return send_from_directory(TOOL_DOWNLOAD_DIR, out_name, as_attachment=True, download_name=out_name)
+    
 
 # -------------------------
 # Uploads & Downloads library (tool cards + per-tool views)
@@ -1262,9 +1465,10 @@ def _count_dict():
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
+        "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
     }
 
 
@@ -1275,10 +1479,11 @@ def uploads_index():
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
-        "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
+        "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])), 
+        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])), 
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
-        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
+        "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1295,9 +1500,10 @@ def uploads_tool(tool):
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
+        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
-        "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
+        "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1341,9 +1547,10 @@ def downloads_index():
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
+        "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1360,9 +1567,10 @@ def downloads_tool(tool):
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
+        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
-        "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
+        "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 

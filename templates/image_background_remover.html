@@ -1,0 +1,135 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-1">Image Background Remover</h3>
+  <p class="text-muted mb-4">
+    Upload a photo (PNG/JPG/JPEG/WEBP/BMP). We'll remove the background and
+    return a PNG with transparency. Your original goes to
+    <code>uploads/</code> and the result to <code>downloads/</code>.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message|safe }}</div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="mb-4">
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="mb-3">
+          <label class="form-label">Image File</label>
+          <input
+            class="form-control"
+            type="file"
+            name="image_file"
+            accept=".png,.jpg,.jpeg,.webp,.bmp,image/png,image/jpeg,image/webp,image/bmp"
+            required
+          />
+          <div class="form-text">
+            Large files are fine; common formats supported.
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Output filename (optional)</label>
+            <input
+              class="form-control"
+              type="text"
+              name="output_name"
+              placeholder="myphoto_no-bg.png"
+            />
+            <div class="form-text">
+              Defaults to <code>&lt;basename&gt;_no-bg.png</code>.
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Removal method</label>
+            <select class="form-select" name="method">
+              <option value="auto" selected>Auto (requires rembg)</option>
+              <option value="chroma">Chroma key (pick color)</option>
+            </select>
+            <div class="form-text">Choose how to remove the background.</div>
+          </div>
+        </div>
+
+        <div
+          id="chromaControls"
+          class="row g-3 mt-1"
+          {%
+          if
+          request.form.method
+          !="chroma"
+          %}style="display:none"
+          {%
+          endif
+          %}
+        >
+          <div class="col-md-6">
+            <label class="form-label">Background color</label>
+            <input
+              type="color"
+              class="form-control form-control-color"
+              name="chroma_color"
+              value="#ffffff"
+              title="Pick likely background color"
+            />
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Tolerance</label>
+            <input
+              type="range"
+              class="form-range"
+              name="chroma_tol"
+              min="5"
+              max="80"
+              step="1"
+              value="25"
+            />
+            <div class="form-text">
+              Higher = remove a wider range around the chosen color.
+            </div>
+          </div>
+        </div>
+
+        <div class="form-check mt-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            value="1"
+            id="feather"
+            name="feather_edges"
+          />
+          <label class="form-check-label" for="feather"
+            >Feather edges slightly</label
+          >
+        </div>
+
+        <button type="submit" class="btn btn-primary mt-3">
+          Remove Background & Download
+        </button>
+      </div>
+    </div>
+    <hr />
+  </form>
+
+  {% if download_url %}
+  <hr />
+  <div class="alert alert-info">
+    Your PNG is ready:
+    <a href="{{ download_url }}" download>Download the background-free image</a>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+  .checkerboard {
+    background-image: linear-gradient(45deg, #ddd 25%, transparent 25%),
+      linear-gradient(-45deg, #ddd 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #ddd 75%),
+      linear-gradient(-45deg, transparent 75%, #ddd 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+</style>
+{% endblock %}

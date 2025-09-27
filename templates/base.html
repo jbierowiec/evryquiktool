@@ -215,6 +215,13 @@
               >Image to Sketch Converter</a
             >
           </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/image_background_remover') else '' }}"
+              href="{{ url_for('image_background_remover') }}"
+              >Image Background Remover</a
+            >
+          </li>
         </ul>
 
         <!-- Library (Uploads/Downloads/Go Back) preserved exactly -->
@@ -315,6 +322,13 @@
             class="nav-link {{ 'active' if request.path.startswith('/image_sketch') else '' }}"
             href="{{ url_for('image_sketch') }}"
             >Image to Sketch Converter</a
+          >
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/image_background_remover') else '' }}"
+            href="{{ url_for('image_background_remover') }}"
+            >Image Background Remover</a
           >
         </li>
       </ul>
