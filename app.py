@@ -31,6 +31,18 @@ from flask import (
 
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
 
+# --- Cookie bootstrap ---
+COOKIE_PATH = Path(os.environ.get("YT_COOKIES_PATH", "/tmp/youtube_cookies.txt"))
+
+_b64 = os.environ.get("YT_COOKIES_B64")
+if _b64 and not COOKIE_PATH.exists():
+    try:
+        COOKIE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        COOKIE_PATH.write_bytes(base64.b64decode(_b64))
+        print(f"[yt] wrote cookiefile {COOKIE_PATH} ({COOKIE_PATH.stat().st_size} bytes)")
+    except Exception as e:
+        print(f"[yt] failed to write cookiefile: {e}")
+
 # Optional dependencies 
 try:
     import yt_dlp  
@@ -193,16 +205,6 @@ def _s_to_hms(sec: int) -> str:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
-COOKIE_PATH = Path(os.environ.get("YT_COOKIES_PATH", "/tmp/youtube_cookies.txt"))
-
-# If provided via base64 env var, write it once to /tmp
-_b64 = os.environ.get("YT_COOKIES_B64")
-if _b64:
-    try:
-        COOKIE_PATH.write_bytes(base64.b64decode(_b64))
-    except Exception:
-        # Don't crash the app if bad env input
-        pass
     
 # -------------------------
 # Landing 
@@ -616,32 +618,37 @@ def sanitize_basename(name: str) -> str:
     return base or "video"
 
 def _common_opts(outtmpl: str) -> dict:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15"
+        ),
+        "Accept-Language": "en-US,en;q=0.8",
+    }
+
     opts = {
         "outtmpl": outtmpl,
         "retries": 10,
         "fragment_retries": 10,
-        "geo_bypass": True,
         "socket_timeout": 30,
-        "force_ipv4": True,
-        "concurrent_fragment_downloads": 1,   # gentler on anti-bot
-        "noplaylist": True,
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
-        "headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15"
-            ),
-            "Accept-Language": "en-US,en;q=0.5",
-        },
         "http_chunk_size": 10 * 1024 * 1024,
+        "force_ipv4": True,
+        "noplaylist": True,
+        "headers": headers,
     }
 
-    # If we have a cookie jar, use it (works on Railway)
+    # If we have a cookie jar, use it and prefer the WEB client.
+    # Otherwise, fall back to Android client (good for public videos).
     try:
         if COOKIE_PATH.exists() and COOKIE_PATH.stat().st_size > 0:
             opts["cookiefile"] = str(COOKIE_PATH)
-    except Exception:
-        pass
+            opts["extractor_args"] = {"youtube": {"player_client": ["web"]}}
+            print("[yt] using cookiefile + web client")
+        else:
+            opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+            print("[yt] no cookies; using android client")
+    except Exception as e:
+        print(f"[yt] cookie check failed: {e}")
 
     return opts
 
@@ -663,10 +670,7 @@ def build_opts(out_dir: Path, base: str, want: str) -> dict:
     common.update({
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bv*+ba/best",
         "merge_output_format": "mp4",
-        "postprocessors": [{
-            "key": "FFmpegVideoRemuxer",
-            "preferedformat": "mp4",
-        }],
+        "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
     })
     return common
 
@@ -685,6 +689,15 @@ def find_final_file(out_dir: Path, base: str, want: str) -> Optional[Path]:
 
 # configure max upload size (optional)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
+
+@app.get("/_yt_debug")
+def _yt_debug():
+    try:
+        exists = COOKIE_PATH.exists()
+        size = COOKIE_PATH.stat().st_size if exists else 0
+        return {"cookiefile": str(COOKIE_PATH), "exists": exists, "size": size}
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 
 # -------------------------
