@@ -26,7 +26,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image, ImageOps, ImageFilter
 from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
-    send_from_directory, send_file, flash, Blueprint, current_app, 
+    send_from_directory, send_file, flash, Blueprint, current_app, abort,
 )
 
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
@@ -538,23 +538,140 @@ def pdf_combiner():
 # -------------------------
 # YouTube Video Downloader
 # -------------------------
+YTDL_DIR = DOWNLOAD_DIR / "yt_vid_downloader"
+
+COOKIE_PATH = Path(os.environ.get("YT_COOKIES_PATH", "/tmp/youtube_cookies.txt"))
+_b64 = os.environ.get("YT_COOKIES_B64")
+if _b64 and not COOKIE_PATH.exists():
+    try:
+        COOKIE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        COOKIE_PATH.write_bytes(base64.b64decode(_b64))
+        print(f"[yt] wrote cookiefile {COOKIE_PATH} ({COOKIE_PATH.stat().st_size} bytes)")
+    except Exception as e:
+        print(f"[yt] failed to write cookiefile: {e}")
+
+# (optional) gate the page with a token if you don’t want others using your cookies
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")  # set this in Railway to enable
+def _require_admin():
+    if ADMIN_TOKEN:
+        tok = request.args.get("key") or request.headers.get("X-Admin-Token")
+        if tok != ADMIN_TOKEN:
+            abort(403)
+
+def sanitize_basename(name: str) -> str:
+    name = (name or "").strip().replace("/", " ").replace("\\", " ")
+    base = secure_filename(Path(name).stem)
+    return base or "video"
+
+def _have_cookies() -> bool:
+    try:
+        return COOKIE_PATH.exists() and COOKIE_PATH.stat().st_size > 0
+    except Exception:
+        return False
+
+def _base_opts(outtmpl: str) -> dict:
+    # Keep this minimal—yt-dlp sets sane headers per client. Extra headers/chunking can trigger 403s.
+    return {
+        "outtmpl": outtmpl,
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 30,
+        "geo_bypass": True,
+        "force_ipv4": True,
+        "noplaylist": True,
+        # do NOT set http_chunk_size or custom headers here; some CDN nodes 403 those
+    }
+
+def _opts_for(client: str, outtmpl: str, use_cookies: bool, want: str, fmt: str, merge_to: Optional[str]) -> dict:
+    opts = _base_opts(outtmpl)
+    opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+    if use_cookies and _have_cookies():
+        opts["cookiefile"] = str(COOKIE_PATH)
+
+    # format selection (passed in)
+    opts["format"] = fmt
+
+    # Only set merge_output_format when we REALLY want to force mp4;
+    # if the picked streams are webm/opus only, forcing mp4 will fail.
+    if merge_to:
+        opts["merge_output_format"] = merge_to
+
+    if want == "mp3":
+        opts.update({
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "0",
+            }],
+        })
+    else:
+        # For video we optionally add a remux postprocessor (safe even if not used).
+        opts.setdefault("postprocessors", []).append({"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"})
+    return opts
+
+
+# Try multiple YouTube clients AND multiple format recipes.
+CLIENT_ORDER = [
+    ("web", True), ("ios", True), ("android", True),
+    ("web", False), ("android", False),
+]
+
+# Prefer MP4 if available; otherwise gracefully fall back to whatever exists.
+FORMAT_ORDER = [
+    # 1) Classic MP4
+    ("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]", "mp4"),
+    # 2) AVC/H.264 (mp4-friendly) even if ext not labelled mp4
+    ("(bv*[vcodec*=avc1]/bv*)+(ba[acodec*=mp4a]/ba)/best", "mp4"),
+    # 3) Anything (may be WEBM/OPUS). Do NOT force mp4 remux here.
+    ("bv*+ba/best", None),
+    # 4) Last-ditch: best single file (audio+video already muxed)
+    ("best", None),
+]
+
+def try_download(url: str, outtmpl: str, want: str):
+    last_err = None
+    for client, use_cookies in CLIENT_ORDER:
+        for fmt, merge_to in FORMAT_ORDER if want != "mp3" else [("bestaudio/best", None)]:
+            opts = _opts_for(client, outtmpl, use_cookies, want, fmt, merge_to)
+            print(f"[yt] trying client={client} cookies={use_cookies} fmt='{fmt}' merge_to={merge_to}")
+            try:
+                with YoutubeDL(opts) as ydl:
+                    ret = ydl.download([url])
+                if ret == 0:
+                    print(f"[yt] success with client={client} fmt='{fmt}'")
+                    return
+                last_err = f"yt-dlp exited with code {ret}"
+            except DownloadError as e:
+                msg = str(e)
+                last_err = msg
+                # If pure format-not-available or 403, keep iterating; otherwise bail.
+                if ("Requested format is not available" in msg) or ("403" in msg) or ("Forbidden" in msg):
+                    continue
+                else:
+                    break
+            except Exception as e:
+                last_err = str(e)
+                break
+    raise RuntimeError(f"Download failed after retries. Last error: {last_err}")
+
+def find_final_file(out_dir: Path, base: str, want: str) -> Optional[Path]:
+    expected = out_dir / f"{base}.{('mp3' if want=='mp3' else 'mp4')}"
+    if expected.exists():
+        return expected
+    for p in out_dir.glob(f"{base}.*"):
+        if p.is_file():
+            return p
+    return None
+
 @app.route("/yt_vid_downloader", methods=["GET", "POST"])
 def yt_vid_downloader():
-    """
-    Renders your Jinja template on GET.
-    On POST, downloads the YouTube URL to downloads/youtube and returns a message.
-    Template vars used:
-      - error: str (optional)
-      - message: str (optional)
-      - file_url: str (optional) → hyperlink target to download the generated file
-      - file_name: str (optional) → display name
-    """
+    # uncomment if you want to restrict access:
+    # _require_admin()
+
     if request.method == "GET":
         return render_template("yt_vid_downloader.html")
-    
-    YTDL_DIR = DOWNLOAD_DIR / "yt_vid_downloader"
 
-    # POST
     url = (request.form.get("video_url") or "").strip()
     output_name = (request.form.get("output_name") or "").strip()
     want_format = (request.form.get("format") or "mp4").strip().lower()  # "mp4" or "mp3"
@@ -565,131 +682,31 @@ def yt_vid_downloader():
         return render_template("yt_vid_downloader.html", error="Invalid format selection.")
 
     base = sanitize_basename(output_name)
-    ydl_opts = build_opts(YTDL_DIR, base, want_format)
+    outtmpl = str(YTDL_DIR / f"{base}.%(ext)s")
 
     try:
-        # Run yt-dlp
-        with YoutubeDL(ydl_opts) as ydl:
-            ret = ydl.download([url])
-            if ret != 0:
-                raise DownloadError(f"yt-dlp exited with code {ret}")
-    except DownloadError as e:
-        # Common causes: copyright blocks, age-gate, bad network segment
-        # You can add cookiesfrombrowser fallback here if desired.
-        # Example:
-        # ydl_opts["cookiesfrombrowser"] = ("safari",)  # or ("chrome",) / ("firefox",)
-        return render_template("yt_vid_downloader.html", error=f"Download failed: {e}")
+        try_download(url, outtmpl, want_format)
     except Exception as e:
-        return render_template("yt_vid_downloader.html", error=f"Unexpected error: {e}")
+        # Surface the most informative error to the UI
+        return render_template("yt_vid_downloader.html", error=f"Download failed: {e}")
 
-    # Locate the produced file and offer a link
     final_path = find_final_file(YTDL_DIR, base, want_format)
     if not final_path:
-        return render_template(
-            "yt_vid_downloader.html",
-            error="Finished, but could not locate the output file."
-        )
+        return render_template("yt_vid_downloader.html",
+                               error="Finished, but could not locate the output file.")
 
-    file_url = url_for("downloads_tool", tool="yt_vid_downloader", filename=final_path.name, _external=False)
-    msg = f"Downloaded successfully as {final_path.name}."
+    # stream the file as attachment
     mimetype = "audio/mpeg" if want_format == "mp3" else "video/mp4"
     return send_from_directory(
         YTDL_DIR,
-        final_path.name,          
+        final_path.name,
         as_attachment=True,
         download_name=final_path.name,
         mimetype=mimetype,
-        conditional=True          
+        conditional=True
     )
 
-def sanitize_basename(name: str) -> str:
-    """
-    Sanitize a user-provided output name to a safe base (no extension).
-    We'll add .mp4 or .mp3 later depending on the choice.
-    """
-    # Strip surrounding spaces and any path components
-    name = (name or "").strip()
-    name = name.replace("/", " ").replace("\\", " ")
-    # Drop extension if user typed one; we control the final extension
-    base = Path(name).stem
-    # Secure it to avoid weird characters
-    base = secure_filename(base)
-    # Fallback if empty
-    return base or "video"
-
-def _common_opts(outtmpl: str) -> dict:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15"
-        ),
-        "Accept-Language": "en-US,en;q=0.8",
-    }
-
-    opts = {
-        "outtmpl": outtmpl,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 30,
-        "http_chunk_size": 10 * 1024 * 1024,
-        "force_ipv4": True,
-        "noplaylist": True,
-        "headers": headers,
-    }
-
-    # If we have a cookie jar, use it and prefer the WEB client.
-    # Otherwise, fall back to Android client (good for public videos).
-    try:
-        if COOKIE_PATH.exists() and COOKIE_PATH.stat().st_size > 0:
-            opts["cookiefile"] = str(COOKIE_PATH)
-            opts["extractor_args"] = {"youtube": {"player_client": ["web"]}}
-            print("[yt] using cookiefile + web client")
-        else:
-            opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
-            print("[yt] no cookies; using android client")
-    except Exception as e:
-        print(f"[yt] cookie check failed: {e}")
-
-    return opts
-
-def build_opts(out_dir: Path, base: str, want: str) -> dict:
-    outtmpl = str(out_dir / f"{base}.%(ext)s")
-    common = _common_opts(outtmpl)
-
-    if want == "mp3":
-        common.update({
-            "format": "bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "0",
-            }],
-        })
-        return common
-
-    common.update({
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bv*+ba/best",
-        "merge_output_format": "mp4",
-        "postprocessors": [{"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"}],
-    })
-    return common
-
-def find_final_file(out_dir: Path, base: str, want: str) -> Optional[Path]:
-    """
-    After yt-dlp runs, locate the final file we expect (.mp4 or .mp3).
-    """
-    expected = out_dir / f"{base}.{('mp3' if want=='mp3' else 'mp4')}"
-    if expected.exists():
-        return expected
-    # Sometimes sites produce slightly different extensions; try to find anything with same stem
-    for p in out_dir.glob(f"{base}.*"):
-        if p.is_file():
-            return p
-    return None
-
-# configure max upload size (optional)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
-
+# Tiny debug endpoint to confirm cookies are present on the server
 @app.get("/_yt_debug")
 def _yt_debug():
     try:
@@ -698,6 +715,9 @@ def _yt_debug():
         return {"cookiefile": str(COOKIE_PATH), "exists": exists, "size": size}
     except Exception as e:
         return {"error": str(e)}, 500
+
+# Optional: ensure Flask won’t reject larger videos (adjust to taste)
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
 
 
 # -------------------------
