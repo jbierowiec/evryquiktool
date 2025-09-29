@@ -6,21 +6,27 @@ import re
 import math
 import uuid
 import shlex
+import pikepdf
 import subprocess
-import shutil as _shutil
 import numpy as np
+import shutil as _shutil
 from pathlib import Path
 from datetime import datetime
+from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 from typing import Optional, List, Tuple
 from shutil import which as sh_which
-
 from werkzeug.utils import secure_filename
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image, ImageOps, ImageFilter
 from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, 
 )
-
 
 # Optional dependencies 
 try:
@@ -112,8 +118,19 @@ ALLOWED_MEDIA_EXTS = {
 
 
 # -------------------------
-# Utilities
+# Utility Functions
 # -------------------------
+_time_re = re.compile(
+    r"""^\s*
+    (?:
+      (?:(\d+):)?        # hours (optional)
+      (?:(\d{1,2}):)?    # minutes (optional)
+      (\d+(?:\.\d+)?)    # seconds (required, may be float)
+    )
+    \s*$""",
+    re.X,
+)
+
 def list_files(dirpath: Path) -> List[str]:
     """Newest-first file names in the directory."""
     if not dirpath.exists():
@@ -122,6 +139,40 @@ def list_files(dirpath: Path) -> List[str]:
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return [p.name for p in files]
 
+def ensure_dirs(*dirs: Path):
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+def tool_dirs(tool: str):
+    """Return (uploads_subdir, downloads_subdir) for a tool key."""
+    return (UPLOAD_DIR / tool, DOWNLOAD_DIR / tool)
+
+def ts_name(name: str) -> str:
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}__{name}"
+
+def ensure_tool_dirs(tool_key: str) -> tuple[Path, Path]:
+    """Return (upload_dir, download_dir) for a tool, creating them if needed."""
+    up = UPLOADS_BY_TOOL.get(tool_key)
+    down = DOWNLOADS_BY_TOOL.get(tool_key)
+    if not up:
+        raise RuntimeError(f"Server upload directory not configured for {tool_key}.")
+    if not down:
+        raise RuntimeError(f"Server download directory not configured for {tool_key}.")
+    up.mkdir(parents=True, exist_ok=True)
+    down.mkdir(parents=True, exist_ok=True)
+    return up, down
+
+def allowed_file(filename):
+    return '.' in filename and filename.lower().rsplit('.', 1)[1] == 'pdf'
+
+def allowed_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
+
+def allowed_video(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_VIDEO_EXTS
+
+def allowed_media(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_MEDIA_EXTS
 
 def ensure_ext(filename: str, desired_ext: str) -> str:
     base, ext = os.path.splitext(filename)
@@ -131,65 +182,13 @@ def ensure_ext(filename: str, desired_ext: str) -> str:
         return f"{base}{desired_ext}"
     return filename
 
-
-def combine_images(image_paths: List[Path], orientation: str = "vertical", target: Optional[int] = None) -> Image.Image:
-    """
-    Open images, optionally resize to a target width/height, and stack vertically or horizontally.
-
-    orientation: "vertical" or "horizontal"
-    target: if vertical, interpreted as target_width; if horizontal, interpreted as target_height
-    """
-    if not image_paths:
-        raise ValueError("No images provided")
-
-    imgs = [Image.open(p).convert("RGB") for p in image_paths]
-
-    if orientation not in {"vertical", "horizontal"}:
-        orientation = "vertical"
-
-    if orientation == "vertical":
-        # Determine target width
-        target_width = target if target is not None else max(img.width for img in imgs)
-
-        # Resize to same width (preserve aspect)
-        resized = []
-        for img in imgs:
-            if img.width != target_width:
-                new_h = int(img.height * (target_width / img.width))
-                resized.append(img.resize((target_width, new_h), Image.LANCZOS))
-            else:
-                resized.append(img)
-
-        total_height = sum(img.height for img in resized)
-        combined = Image.new("RGB", (target_width, total_height), color=(255, 255, 255))
-
-        y = 0
-        for img in resized:
-            combined.paste(img, (0, y))
-            y += img.height
-
-    else:  # horizontal
-        # Determine target height
-        target_height = target if target is not None else max(img.height for img in imgs)
-
-        # Resize to same height (preserve aspect)
-        resized = []
-        for img in imgs:
-            if img.height != target_height:
-                new_w = int(img.width * (target_height / img.height))
-                resized.append(img.resize((new_w, target_height), Image.LANCZOS))
-            else:
-                resized.append(img)
-
-        total_width = sum(img.width for img in resized)
-        combined = Image.new("RGB", (total_width, target_height), color=(255, 255, 255))
-
-        x = 0
-        for img in resized:
-            combined.paste(img, (x, 0))
-            x += img.width
-
-    return combined
+def _s_to_hms(sec: int) -> str:
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    s = sec % 60
+    if h:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
 
 
 # -------------------------
@@ -198,281 +197,6 @@ def combine_images(image_paths: List[Path], orientation: str = "vertical", targe
 @app.route("/")
 def landing():
     return render_template("landing.html")
-
-
-# -------------------------
-# Image Combiner
-# -------------------------
-@app.route("/image_combiner", methods=["GET", "POST"])
-def image_combiner():
-    if request.method == "GET":
-        return render_template("image_combiner.html", max_files=MAX_FILES)
-
-    try:
-        # How many inputs?
-        try:
-            num = int(request.form.get("num_images", "2"))
-        except Exception:
-            num = 2
-        num = max(2, min(MAX_FILES, num))
-
-        # Collect files in the given order
-        files = []
-        for i in range(1, num + 1):
-            f = request.files.get(f"image_{i}")
-            if f and f.filename:
-                files.append(f)
-
-        if len(files) < 2:
-            flash("Please upload at least two images.", "warning")
-            return render_template("image_combiner.html", max_files=MAX_FILES)
-
-        # Orientation (vertical/horizontal)
-        orientation = (request.form.get("orientation") or "vertical").lower().strip()
-        if orientation not in {"vertical", "horizontal"}:
-            orientation = "vertical"
-
-        # Save uploads
-        up_dir = UPLOADS_BY_TOOL["image_combiner"]
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        saved_paths: List[Path] = []
-        for idx, f in enumerate(files, start=1):
-            name = secure_filename(f.filename)
-            base, ext = os.path.splitext(name)
-            if ext.lower() not in ALLOWED_IMG_EXTS:
-                flash(f"Unsupported file type: {name}", "danger")
-                return render_template("image_combiner.html", max_files=MAX_FILES)
-            safe_name = f"{stamp}_{idx}_{base}{ext.lower()}"
-            dst = up_dir / safe_name
-            f.save(dst)
-            saved_paths.append(dst)
-
-        # Combine (auto target dimension is picked inside)
-        combined = combine_images(saved_paths, orientation=orientation)
-
-        # Output file name
-        raw_name = (request.form.get("output_name") or "").strip() or f"combined_{stamp}.png"
-        safe_out = secure_filename(raw_name)
-        safe_out = ensure_ext(safe_out, ".png")
-
-        out_dir = DOWNLOADS_BY_TOOL["image_combiner"]
-        out_path = out_dir / safe_out
-        counter = 1
-        base, ext = os.path.splitext(safe_out)
-        while out_path.exists():
-            out_path = out_dir / f"{base}_{counter}{ext}"
-            counter += 1
-
-        combined.save(out_path, format="PNG", quality=95)
-
-        # Success message will show when they visit Downloads, but here we also auto-download.
-        # The file is ALREADY saved in your downloads page folder.
-        return send_file(
-            out_path,
-            mimetype="image/png",
-            as_attachment=True,
-            download_name=out_path.name
-        )
-
-    except Exception as e:
-        flash(f"Combine failed: {e}", "danger")
-        return render_template("image_combiner.html", max_files=MAX_FILES)
-
-
-# -------------------------
-# YouTube Video Downloader
-# -------------------------
-def _has_video_stream(path: Path) -> bool:
-    """Return True if ffprobe reports at least one video stream in the file."""
-    if sh_which("ffprobe") is None:
-        # If ffprobe isn't present, assume OK to avoid blocking downloads.
-        return True
-    try:
-        # Ask ffprobe to list video stream indexes; if any, we’re good.
-        cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=index",
-            "-of", "csv=p=0", str(path)
-        ]
-        out = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        return bool(out.stdout.strip())
-    except Exception:
-        return True
-
-
-@app.route("/yt_vid_downloader", methods=["GET", "POST"])
-def yt_vid_downloader():
-    """Download a YouTube URL as MP4 (video) or MP3 (audio-only) and auto-send to browser."""
-    if request.method == "GET":
-        return render_template("yt_vid_downloader.html")
-
-    # --- POST begins ---
-    if yt_dlp is None:
-        flash("Missing dependency: yt-dlp. Run: pip install yt-dlp", "danger")
-        return render_template("yt_vid_downloader.html")
-
-    if sh_which("ffmpeg") is None:
-        flash("Missing dependency: ffmpeg. Install it (e.g., brew install ffmpeg) and restart.", "danger")
-        return render_template("yt_vid_downloader.html")
-
-    video_url = (request.form.get("video_url") or "").strip()
-    output_name = (request.form.get("output_name") or "").strip()
-    fmt = (request.form.get("format") or "mp4").lower().strip()
-
-    if not video_url:
-        flash("Please paste a YouTube URL.", "warning")
-        return render_template("yt_vid_downloader.html")
-
-    # Normalize base filename
-    safe = secure_filename(output_name) if output_name else "video"
-    base, _ext = os.path.splitext(safe)
-    final_base = base or "video"
-
-    out_dir: Path = DOWNLOADS_BY_TOOL["yt_vid_downloader"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    outtmpl = str(out_dir / f"{final_base}.%(ext)s")
-
-    # ---------- AUDIO ONLY (MP3) ----------
-    if fmt == "mp3":
-        ydl_opts = {
-            "outtmpl": outtmpl,
-            "quiet": True,
-            "noprogress": True,
-            "format": "bestaudio/best",
-            "postprocessors": [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"}
-            ],
-        }
-        expected = out_dir / f"{final_base}.mp3"
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([video_url])
-        except Exception as e:
-            flash(f"Download failed: {e}", "danger")
-            return render_template("yt_vid_downloader.html")
-
-        path = expected if expected.exists() else max(
-            out_dir.glob(f"{final_base}.*"), key=lambda p: p.stat().st_mtime, default=None
-        )
-        if not path or not path.exists():
-            flash("We couldn't locate the downloaded file. Please try again.", "danger")
-            return render_template("yt_vid_downloader.html")
-
-        return send_file(path, as_attachment=True, download_name=path.name)
-
-    # ---------- VIDEO (MP4) ----------
-    # 1) Prefer a progressive H.264/AAC MP4 (already has both tracks).
-    # 2) Else H.264 video + AAC audio (separate) merged to MP4.
-    # 3) Else any MP4; else best available.
-    primary_opts = {
-        "outtmpl": outtmpl,
-        "quiet": True,
-        "noprogress": True,
-        "format": (
-            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]/"
-            "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/"
-            "best[ext=mp4]/"
-            "best"
-        ),
-        "merge_output_format": "mp4",
-        "postprocessors": [
-            {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},  # remux (no re-encode) when possible
-        ],
-    }
-    expected_mp4 = out_dir / f"{final_base}.mp4"
-
-    def newest_match() -> Path | None:
-        return max(out_dir.glob(f"{final_base}.*"), key=lambda p: p.stat().st_mtime, default=None)
-
-    # Pass 1: try to get a QuickTime-friendly MP4 without re-encoding
-    try:
-        with yt_dlp.YoutubeDL(primary_opts) as ydl:
-            ydl.download([video_url])
-    except Exception as e:
-        flash(f"Download failed: {e}", "danger")
-        return render_template("yt_vid_downloader.html")
-
-    saved = expected_mp4 if expected_mp4.exists() else newest_match()
-    if not saved or not saved.exists():
-        flash("We couldn't locate the downloaded file. Please try again.", "danger")
-        return render_template("yt_vid_downloader.html")
-
-    # If it isn't an MP4 (e.g., WEBM) or it somehow lacks a video stream, do a guaranteed fallback.
-    need_fallback = (saved.suffix.lower() != ".mp4") or (not _has_video_stream(saved))
-    if need_fallback:
-        # Re-encode to H.264/AAC MP4 so QuickTime plays it, and ensure both video+audio present.
-        fallback_opts = {
-            "outtmpl": outtmpl,
-            "quiet": True,
-            "noprogress": True,
-            "format": "bestvideo+bestaudio/best",
-            "recode_video": "mp4",
-            "postprocessor_args": [
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-profile:v", "high",
-                "-level", "4.1",
-                "-movflags", "+faststart",
-                "-c:a", "aac",
-                "-b:a", "192k",
-            ],
-        }
-        try:
-            with yt_dlp.YoutubeDL(fallback_opts) as ydl:
-                ydl.download([video_url])
-        except Exception as e:
-            flash(f"Re-encode fallback failed: {e}", "danger")
-            return render_template("yt_vid_downloader.html")
-
-        saved = expected_mp4 if expected_mp4.exists() else newest_match()
-        if not saved or not saved.exists():
-            flash("We couldn't locate the re-encoded file.", "danger")
-            return render_template("yt_vid_downloader.html")
-
-    # Normalize filename to <final_base>.mp4
-    target = expected_mp4
-    if saved != target:
-        try:
-            saved.rename(target)
-        except Exception:
-            target = saved
-
-    # Final guard: if still somehow no video stream, inform user.
-    if not _has_video_stream(target):
-        flash(
-            "We produced an MP4 but it appears to be audio-only. "
-            "Try a different video quality or URL.",
-            "danger",
-        )
-        # Still send the file so the user has *something*:
-        return send_file(target, as_attachment=True, download_name=target.name)
-
-    # Success — send immediately and keep a copy in downloads/youtube
-    return send_file(target, as_attachment=True, download_name=target.name)
-
-
-# configure max upload size (optional)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
-
-
-# Allowed extension helper
-def allowed_file(filename):
-    return '.' in filename and filename.lower().rsplit('.', 1)[1] == 'pdf'
-
-
-def ensure_dirs(*dirs: Path):
-    for d in dirs:
-        d.mkdir(parents=True, exist_ok=True)
-
-
-def tool_dirs(tool: str):
-    """Return (uploads_subdir, downloads_subdir) for a tool key."""
-    return (UPLOAD_DIR / tool, DOWNLOAD_DIR / tool)
-
-
-def ts_name(name: str) -> str:
-    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}__{name}"
 
 
 # -------------------------
@@ -512,7 +236,6 @@ def pdf_decrypter():
 
     # decrypt -> write to downloads/pdf_decrypter/
     try:
-        import pikepdf
         try:
             with pikepdf.open(str(upload_path), password=password) as pdf:
                 pdf.save(str(out_path))
@@ -547,6 +270,24 @@ def pdf_decrypter():
         mimetype="application/pdf",
         max_age=0,
     )
+
+def _safe_output_name(name: str) -> str:
+    """
+    Normalize the output file name, enforcing .pdf extension and a reasonable base.
+    """
+    name = (name or "").strip()
+    if not name:
+        # default with timestamp
+        name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    else:
+        # sanitize
+        name = secure_filename(name)
+        if not name:
+            name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        # ensure .pdf
+        if not name.lower().endswith(".pdf"):
+            name = f"{name}.pdf"
+    return name
 
 
 # -------------------------
@@ -699,31 +440,8 @@ def pdf_encrypter():
     return render_template("pdf_encrypter.html", error=error, message=message, counts=counts)
 
 
-def _is_pdf(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_PDF_EXT
-
-
-def _safe_output_name(name: str) -> str:
-    """
-    Normalize the output file name, enforcing .pdf extension and a reasonable base.
-    """
-    name = (name or "").strip()
-    if not name:
-        # default with timestamp
-        name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    else:
-        # sanitize
-        name = secure_filename(name)
-        if not name:
-            name = f"merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        # ensure .pdf
-        if not name.lower().endswith(".pdf"):
-            name = f"{name}.pdf"
-    return name
-
-
 # -----------------------------
-# PDF combiner Page
+# PDF Combiner 
 # -----------------------------
 @app.route("/pdf_combiner", methods=["GET", "POST"])
 def pdf_combiner():
@@ -800,241 +518,146 @@ def pdf_combiner():
                      as_attachment=True,
                      download_name=out_name,
                      max_age=0)
-
-
-def _ensure_tool_dirs(tool_key: str) -> tuple[Path, Path]:
-    """Return (upload_dir, download_dir) for a tool, creating them if needed."""
-    up = UPLOADS_BY_TOOL.get(tool_key)
-    down = DOWNLOADS_BY_TOOL.get(tool_key)
-    if not up:
-        raise RuntimeError(f"Server upload directory not configured for {tool_key}.")
-    if not down:
-        raise RuntimeError(f"Server download directory not configured for {tool_key}.")
-    up.mkdir(parents=True, exist_ok=True)
-    down.mkdir(parents=True, exist_ok=True)
-    return up, down
-
-
-def _is_allowed_image(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
-
-
-def image_to_sketch(in_path: Path, out_path: Path, blur_radius: int = 15, boost_contrast: bool = False) -> None:
-    """
-    Convert image to a pencil-style sketch using a color-dodge blend:
-      sketch = gray * 255 / (255 - blur(gray))
-    Writes exactly to `out_path` (caller decides extension; we use .png).
-    """
-    with Image.open(in_path) as im:
-        im = im.convert("RGB")
-        gray = ImageOps.grayscale(im)
-
-        if boost_contrast:
-            gray = ImageOps.autocontrast(gray, cutoff=1)
-
-        blur = gray.filter(ImageFilter.GaussianBlur(radius=max(1, int(blur_radius))))
-
-        g = np.array(gray, dtype=np.float32)
-        b = np.array(blur, dtype=np.float32)
-
-        denom = 255.0 - b
-        denom[denom < 1] = 1  # avoid division by zero
-        dodge = (g * 255.0) / denom
-        dodge = np.clip(dodge, 0, 255).astype(np.uint8)
-
-        sketch = Image.fromarray(dodge, mode="L")
-        if boost_contrast:
-            sketch = ImageOps.autocontrast(sketch, cutoff=1)
-
-        # Save exactly to requested path (caller enforces .png)
-        out_path = out_path.with_suffix(".png")
-        sketch.save(out_path, format="PNG")
-
+    
 
 # -------------------------
-# Image to Sketch Converter
+# YouTube Video Downloader
 # -------------------------
-@app.route("/image_sketch", methods=["GET", "POST"])
-def image_sketch():
+@app.route("/yt_vid_downloader", methods=["GET", "POST"])
+def yt_vid_downloader():
     """
-    Upload an image -> save the original to uploads/image_sketcher/.
-    Convert to sketch -> save PNG to downloads/image_sketcher/ and return it.
-    Files are kept on disk so dashboard counters update.
+    Renders your Jinja template on GET.
+    On POST, downloads the YouTube URL to downloads/youtube and returns a message.
+    Template vars used:
+      - error: str (optional)
+      - message: str (optional)
+      - file_url: str (optional) → hyperlink target to download the generated file
+      - file_name: str (optional) → display name
     """
-    error = None
-    message = None
+    if request.method == "GET":
+        return render_template("yt_vid_downloader.html")
+    
+    YTDL_DIR = DOWNLOAD_DIR / "yt_vid_downloader"
 
-    TOOL_KEY = "image_sketch"
+    # POST
+    url = (request.form.get("video_url") or "").strip()
+    output_name = (request.form.get("output_name") or "").strip()
+    want_format = (request.form.get("format") or "mp4").strip().lower()  # "mp4" or "mp3"
 
-    if request.method == "POST":
-        uploaded = request.files.get("image_file")
-        requested_out = (request.form.get("output_name") or "").strip()
-        boost = bool(request.form.get("high_contrast"))
-        try:
-            blur_radius = int(request.form.get("blur_radius", 15))
-        except ValueError:
-            blur_radius = 15
+    if not url:
+        return render_template("yt_vid_downloader.html", error="Please provide a YouTube URL.")
+    if want_format not in {"mp4", "mp3"}:
+        return render_template("yt_vid_downloader.html", error="Invalid format selection.")
 
-        # Basic validations
-        if not uploaded or uploaded.filename.strip() == "":
-            error = "Please choose an image file."
-            return render_template("image_sketch.html", error=error)
+    base = sanitize_basename(output_name)
+    ydl_opts = build_opts(YTDL_DIR, base, want_format)
 
-        if not _is_allowed_image(uploaded.filename):
-            error = "Unsupported file type. Please upload PNG/JPG/JPEG/WEBP/BMP."
-            return render_template("image_sketch.html", error=error)
+    try:
+        # Run yt-dlp
+        with YoutubeDL(ydl_opts) as ydl:
+            ret = ydl.download([url])
+            if ret != 0:
+                raise DownloadError(f"yt-dlp exited with code {ret}")
+    except DownloadError as e:
+        # Common causes: copyright blocks, age-gate, bad network segment
+        # You can add cookiesfrombrowser fallback here if desired.
+        # Example:
+        # ydl_opts["cookiesfrombrowser"] = ("safari",)  # or ("chrome",) / ("firefox",)
+        return render_template("yt_vid_downloader.html", error=f"Download failed: {e}")
+    except Exception as e:
+        return render_template("yt_vid_downloader.html", error=f"Unexpected error: {e}")
 
-        # Ensure directories
-        try:
-            upload_base, download_base = _ensure_tool_dirs(TOOL_KEY)
-        except Exception as e:
-            error = f"Server misconfiguration: {e}"
-            return render_template("image_sketch.html", error=error)
-
-        # Save upload with timestamp (like pdf_encrypter)
-        original_name = secure_filename(uploaded.filename) or "uploaded_image.png"
-        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        saved_input_name = f"{timestamp}_{original_name}"
-        input_path = upload_base / saved_input_name
-        try:
-            uploaded.save(str(input_path))
-        except Exception as e:
-            error = f"Failed to save uploaded file: {e}"
-            return render_template("image_sketch.html", error=error)
-
-        # Decide output file name (always .png)
-        if requested_out:
-            out_stem = Path(requested_out).stem  # strip user extension
-            output_name_safe = f"{secure_filename(out_stem)}.png"
-        else:
-            output_name_safe = f"{Path(original_name).stem}_sketch.png"
-
-        output_path = download_base / output_name_safe
-        if output_path.exists():
-            output_path = download_base / f"{timestamp}_{output_name_safe}"
-
-        # Convert
-        try:
-            image_to_sketch(input_path, output_path, blur_radius=blur_radius, boost_contrast=boost)
-        except Exception as e:
-            try:
-                if output_path.exists():
-                    output_path.unlink()
-            except:
-                pass
-            error = f"Failed to convert image: {e}"
-            return render_template("image_sketch.html", error=error)
-
-        if not output_path.exists():
-            error = "Sketch process completed but output file was not created."
-            return render_template("image_sketch.html", error=error)
-
-        flash(f"Sketch saved to downloads: {output_path.name}", "success")
-        return send_file(
-            str(output_path),
-            as_attachment=True,
-            download_name=output_path.name,
-            mimetype="image/png",
+    # Locate the produced file and offer a link
+    final_path = find_final_file(YTDL_DIR, base, want_format)
+    if not final_path:
+        return render_template(
+            "yt_vid_downloader.html",
+            error="Finished, but could not locate the output file."
         )
 
-    # GET
-    try:
-        counts = _count_dict() if "_count_dict" in globals() else {}
-    except Exception:
-        counts = {}
-    return render_template("image_sketch.html", error=error, message=message, counts=counts)
-
-
-def _is_allowed_video(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_VIDEO_EXTS
-
-_time_re = re.compile(
-    r"""^\s*
-    (?:
-      (?:(\d+):)?        # hours (optional)
-      (?:(\d{1,2}):)?    # minutes (optional)
-      (\d+(?:\.\d+)?)    # seconds (required, may be float)
-    )
-    \s*$""",
-    re.X,
-)
-
-
-def parse_timecode(s: str) -> float:
-    """
-    Accepts SS, MM:SS, or HH:MM:SS(.ms) and returns seconds as float.
-    Examples: '21' -> 21.0; '1:05' -> 65.0; '00:01:05.5' -> 65.5
-    """
-    s = s.strip()
-    if not s:
-        raise ValueError("Empty timecode")
-    parts = s.split(":")
-    if len(parts) == 1:
-        return float(parts[0])
-    elif len(parts) == 2:
-        m, sec = parts
-        return int(m) * 60 + float(sec)
-    elif len(parts) == 3:
-        h, m, sec = parts
-        return int(h) * 3600 + int(m) * 60 + float(sec)
-    else:
-        m = _time_re.match(s)
-        if m:
-            h = int(m.group(1) or 0)
-            mm = int(m.group(2) or 0)
-            ss = float(m.group(3))
-            return h * 3600 + mm * 60 + ss
-        raise ValueError(f"Invalid time format: {s}")
-
-
-def ffprobe_duration_seconds(in_path: Path) -> float:
-    """
-    Returns media duration in seconds using ffprobe.
-    """
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(in_path),
-    ]
-    out = subprocess.check_output(cmd, text=True).strip()
-    return float(out)
-
-
-def remove_segment_with_concat(in_path: Path, start_s: float, end_s: float, out_path: Path) -> None:
-    """
-    Robust approach that re-encodes using filter_complex:
-      - Create two segments: [0, start) and (end, EOF]
-      - Concat them back together.
-    This is resilient to keyframe boundaries and mixed codecs/containers.
-    """
-    # Build filter graph
-    filter_graph = (
-        f"[0:v]trim=end={start_s},setpts=PTS-STARTPTS[v0];"
-        f"[0:a]atrim=end={start_s},asetpts=PTS-STARTPTS[a0];"
-        f"[0:v]trim=start={end_s},setpts=PTS-STARTPTS[v1];"
-        f"[0:a]atrim=start={end_s},asetpts=PTS-STARTPTS[a1];"
-        f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
+    file_url = url_for("downloads_tool", tool="yt_vid_downloader", filename=final_path.name, _external=False)
+    msg = f"Downloaded successfully as {final_path.name}."
+    mimetype = "audio/mpeg" if want_format == "mp3" else "video/mp4"
+    return send_from_directory(
+        YTDL_DIR,
+        final_path.name,          
+        as_attachment=True,
+        download_name=final_path.name,
+        mimetype=mimetype,
+        conditional=True          
     )
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", str(in_path),
-        "-filter_complex", filter_graph,
-        "-map", "[v]",
-        "-map", "[a]",
-        "-c:v", "libx264",          # re-encode for compatibility
-        "-c:a", "aac",
-        "-movflags", "+faststart",
-        "-preset", "veryfast",
-        "-crf", "20",
-        str(out_path),
-    ]
-    subprocess.check_call(cmd)
+def sanitize_basename(name: str) -> str:
+    """
+    Sanitize a user-provided output name to a safe base (no extension).
+    We'll add .mp4 or .mp3 later depending on the choice.
+    """
+    # Strip surrounding spaces and any path components
+    name = (name or "").strip()
+    name = name.replace("/", " ").replace("\\", " ")
+    # Drop extension if user typed one; we control the final extension
+    base = Path(name).stem
+    # Secure it to avoid weird characters
+    base = secure_filename(base)
+    # Fallback if empty
+    return base or "video"
+
+def build_opts(out_dir: Path, base: str, want: str) -> dict:
+    outtmpl = str(out_dir / f"{base}.%(ext)s")
+
+    if want == "mp3":
+        return {
+            "outtmpl": outtmpl,
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "0",
+            }],
+            "retries": 10,
+            "fragment_retries": 10,
+            "geo_bypass": True,
+            "socket_timeout": 30,
+        }
+
+    return {
+        "outtmpl": outtmpl,
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bv*+ba/best",
+        "merge_output_format": "mp4",
+        "postprocessors": [{
+            "key": "FFmpegVideoRemuxer",
+            "preferedformat": "mp4",
+        }],
+        "retries": 10,
+        "fragment_retries": 10,
+        "geo_bypass": True,
+        "socket_timeout": 30,
+        "force_ipv4": True,
+        "http_chunk_size": 10 * 1024 * 1024,           # 👈 fixed
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        # "cookiesfrombrowser": ("safari",),  # optional if still blocked
+    }
+
+def find_final_file(out_dir: Path, base: str, want: str) -> Optional[Path]:
+    """
+    After yt-dlp runs, locate the final file we expect (.mp4 or .mp3).
+    """
+    expected = out_dir / f"{base}.{('mp3' if want=='mp3' else 'mp4')}"
+    if expected.exists():
+        return expected
+    # Sometimes sites produce slightly different extensions; try to find anything with same stem
+    for p in out_dir.glob(f"{base}.*"):
+        if p.is_file():
+            return p
+    return None
+
+# configure max upload size (optional)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB limit; adjust as needed
 
 
+# -------------------------
+# Video Time Crop Editor
+# -------------------------
 @app.route("/video_cropper", methods=["GET", "POST"])
 def video_cropper():
     if request.method == "GET":
@@ -1049,7 +672,7 @@ def video_cropper():
     if not file or file.filename == "":
         return render_template("video_cropper.html", error="Please choose a video file.")
 
-    if not _is_allowed_video(file.filename):
+    if not allowed_video(file.filename):
         return render_template("video_cropper.html", error="Unsupported video type.")
 
     try:
@@ -1098,20 +721,82 @@ def video_cropper():
     # Success: serve file as download and also leave it in downloads/
     return send_file(out_path, as_attachment=True, download_name=out_name)
 
+def parse_timecode(s: str) -> float:
+    """
+    Accepts SS, MM:SS, or HH:MM:SS(.ms) and returns seconds as float.
+    Examples: '21' -> 21.0; '1:05' -> 65.0; '00:01:05.5' -> 65.5
+    """
+    s = s.strip()
+    if not s:
+        raise ValueError("Empty timecode")
+    parts = s.split(":")
+    if len(parts) == 1:
+        return float(parts[0])
+    elif len(parts) == 2:
+        m, sec = parts
+        return int(m) * 60 + float(sec)
+    elif len(parts) == 3:
+        h, m, sec = parts
+        return int(h) * 3600 + int(m) * 60 + float(sec)
+    else:
+        m = _time_re.match(s)
+        if m:
+            h = int(m.group(1) or 0)
+            mm = int(m.group(2) or 0)
+            ss = float(m.group(3))
+            return h * 3600 + mm * 60 + ss
+        raise ValueError(f"Invalid time format: {s}")
 
-def _is_allowed_media(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_MEDIA_EXTS
+def ffprobe_duration_seconds(in_path: Path) -> float:
+    """
+    Returns media duration in seconds using ffprobe.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(in_path),
+    ]
+    out = subprocess.check_output(cmd, text=True).strip()
+    return float(out)
+
+def remove_segment_with_concat(in_path: Path, start_s: float, end_s: float, out_path: Path) -> None:
+    """
+    Robust approach that re-encodes using filter_complex:
+      - Create two segments: [0, start) and (end, EOF]
+      - Concat them back together.
+    This is resilient to keyframe boundaries and mixed codecs/containers.
+    """
+    # Build filter graph
+    filter_graph = (
+        f"[0:v]trim=end={start_s},setpts=PTS-STARTPTS[v0];"
+        f"[0:a]atrim=end={start_s},asetpts=PTS-STARTPTS[a0];"
+        f"[0:v]trim=start={end_s},setpts=PTS-STARTPTS[v1];"
+        f"[0:a]atrim=start={end_s},asetpts=PTS-STARTPTS[a1];"
+        f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(in_path),
+        "-filter_complex", filter_graph,
+        "-map", "[v]",
+        "-map", "[a]",
+        "-c:v", "libx264",          # re-encode for compatibility
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        "-preset", "veryfast",
+        "-crf", "20",
+        str(out_path),
+    ]
+    subprocess.check_call(cmd)
 
 
-def _s_to_hms(sec: int) -> str:
-    h = sec // 3600
-    m = (sec % 3600) // 60
-    s = sec % 60
-    if h:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
-
-
+# -------------------------
+# Audio to Text Transcriber
+# -------------------------
 @app.route("/audio_to_text", methods=["GET", "POST"])
 def audio_to_text():
     if request.method == "GET":
@@ -1129,7 +814,7 @@ def audio_to_text():
         flash(msg, "danger")
         return redirect(request.url)
 
-    if not _is_allowed_media(f.filename):
+    if not allowed_media(f.filename):
         msg = "Unsupported file type."
         if is_xhr:
             return jsonify(ok=False, error=msg), 400
@@ -1212,12 +897,6 @@ def audio_to_text():
         lines.append(f"{_s_to_hms(s)}  {text.strip()}")
 
     # --- Write PDF to the tool's downloads folder ---
-    from reportlab.lib.pagesizes import letter
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.units import inch
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if output_name and not output_name.lower().endswith(".pdf"):
         output_name += ".pdf"
@@ -1274,21 +953,339 @@ def audio_to_text():
     return send_from_directory(DOWNLOADS_BY_TOOL["audio_to_text"], out_pdf.name, as_attachment=True)
 
 
+# -------------------------
+# Image Combiner
+# -------------------------
+@app.route("/image_combiner", methods=["GET", "POST"])
+def image_combiner():
+    if request.method == "GET":
+        return render_template("image_combiner.html", max_files=MAX_FILES)
+
+    try:
+        # How many inputs?
+        try:
+            num = int(request.form.get("num_images", "2"))
+        except Exception:
+            num = 2
+        num = max(2, min(MAX_FILES, num))
+
+        # Collect files in the given order
+        files = []
+        for i in range(1, num + 1):
+            f = request.files.get(f"image_{i}")
+            if f and f.filename:
+                files.append(f)
+
+        if len(files) < 2:
+            flash("Please upload at least two images.", "warning")
+            return render_template("image_combiner.html", max_files=MAX_FILES)
+
+        # Orientation (vertical/horizontal)
+        orientation = (request.form.get("orientation") or "vertical").lower().strip()
+        if orientation not in {"vertical", "horizontal"}:
+            orientation = "vertical"
+
+        # Save uploads
+        up_dir = UPLOADS_BY_TOOL["image_combiner"]
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        saved_paths: List[Path] = []
+        for idx, f in enumerate(files, start=1):
+            name = secure_filename(f.filename)
+            base, ext = os.path.splitext(name)
+            if ext.lower() not in ALLOWED_IMG_EXTS:
+                flash(f"Unsupported file type: {name}", "danger")
+                return render_template("image_combiner.html", max_files=MAX_FILES)
+            safe_name = f"{stamp}_{idx}_{base}{ext.lower()}"
+            dst = up_dir / safe_name
+            f.save(dst)
+            saved_paths.append(dst)
+
+        # Combine (auto target dimension is picked inside)
+        combined = combine_images(saved_paths, orientation=orientation)
+
+        # Output file name
+        raw_name = (request.form.get("output_name") or "").strip() or f"combined_{stamp}.png"
+        safe_out = secure_filename(raw_name)
+        safe_out = ensure_ext(safe_out, ".png")
+
+        out_dir = DOWNLOADS_BY_TOOL["image_combiner"]
+        out_path = out_dir / safe_out
+        counter = 1
+        base, ext = os.path.splitext(safe_out)
+        while out_path.exists():
+            out_path = out_dir / f"{base}_{counter}{ext}"
+            counter += 1
+
+        combined.save(out_path, format="PNG", quality=95)
+
+        # Success message will show when they visit Downloads, but here we also auto-download.
+        # The file is ALREADY saved in your downloads page folder.
+        return send_file(
+            out_path,
+            mimetype="image/png",
+            as_attachment=True,
+            download_name=out_path.name
+        )
+
+    except Exception as e:
+        flash(f"Combine failed: {e}", "danger")
+        return render_template("image_combiner.html", max_files=MAX_FILES)
+
+def combine_images(image_paths: List[Path], orientation: str = "vertical", target: Optional[int] = None) -> Image.Image:
+    """
+    Open images, optionally resize to a target width/height, and stack vertically or horizontally.
+
+    orientation: "vertical" or "horizontal"
+    target: if vertical, interpreted as target_width; if horizontal, interpreted as target_height
+    """
+    if not image_paths:
+        raise ValueError("No images provided")
+
+    imgs = [Image.open(p).convert("RGB") for p in image_paths]
+
+    if orientation not in {"vertical", "horizontal"}:
+        orientation = "vertical"
+
+    if orientation == "vertical":
+        # Determine target width
+        target_width = target if target is not None else max(img.width for img in imgs)
+
+        # Resize to same width (preserve aspect)
+        resized = []
+        for img in imgs:
+            if img.width != target_width:
+                new_h = int(img.height * (target_width / img.width))
+                resized.append(img.resize((target_width, new_h), Image.LANCZOS))
+            else:
+                resized.append(img)
+
+        total_height = sum(img.height for img in resized)
+        combined = Image.new("RGB", (target_width, total_height), color=(255, 255, 255))
+
+        y = 0
+        for img in resized:
+            combined.paste(img, (0, y))
+            y += img.height
+
+    else:  # horizontal
+        # Determine target height
+        target_height = target if target is not None else max(img.height for img in imgs)
+
+        # Resize to same height (preserve aspect)
+        resized = []
+        for img in imgs:
+            if img.height != target_height:
+                new_w = int(img.width * (target_height / img.height))
+                resized.append(img.resize((new_w, target_height), Image.LANCZOS))
+            else:
+                resized.append(img)
+
+        total_width = sum(img.width for img in resized)
+        combined = Image.new("RGB", (total_width, target_height), color=(255, 255, 255))
+
+        x = 0
+        for img in resized:
+            combined.paste(img, (x, 0))
+            x += img.width
+
+    return combined
+
+
+# -------------------------
+# Image to Sketch Converter
+# -------------------------
+@app.route("/image_sketch", methods=["GET", "POST"])
+def image_sketch():
+    """
+    Upload an image -> save the original to uploads/image_sketcher/.
+    Convert to sketch -> save PNG to downloads/image_sketcher/ and return it.
+    Files are kept on disk so dashboard counters update.
+    """
+    error = None
+    message = None
+
+    TOOL_KEY = "image_sketch"
+
+    if request.method == "POST":
+        uploaded = request.files.get("image_file")
+        requested_out = (request.form.get("output_name") or "").strip()
+        boost = bool(request.form.get("high_contrast"))
+        try:
+            blur_radius = int(request.form.get("blur_radius", 15))
+        except ValueError:
+            blur_radius = 15
+
+        # Basic validations
+        if not uploaded or uploaded.filename.strip() == "":
+            error = "Please choose an image file."
+            return render_template("image_sketch.html", error=error)
+
+        if not allowed_image(uploaded.filename):
+            error = "Unsupported file type. Please upload PNG/JPG/JPEG/WEBP/BMP."
+            return render_template("image_sketch.html", error=error)
+
+        # Ensure directories
+        try:
+            upload_base, download_base = ensure_tool_dirs(TOOL_KEY)
+        except Exception as e:
+            error = f"Server misconfiguration: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        # Save upload with timestamp (like pdf_encrypter)
+        original_name = secure_filename(uploaded.filename) or "uploaded_image.png"
+        timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        saved_input_name = f"{timestamp}_{original_name}"
+        input_path = upload_base / saved_input_name
+        try:
+            uploaded.save(str(input_path))
+        except Exception as e:
+            error = f"Failed to save uploaded file: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        # Decide output file name (always .png)
+        if requested_out:
+            out_stem = Path(requested_out).stem  # strip user extension
+            output_name_safe = f"{secure_filename(out_stem)}.png"
+        else:
+            output_name_safe = f"{Path(original_name).stem}_sketch.png"
+
+        output_path = download_base / output_name_safe
+        if output_path.exists():
+            output_path = download_base / f"{timestamp}_{output_name_safe}"
+
+        # Convert
+        try:
+            image_to_sketch(input_path, output_path, blur_radius=blur_radius, boost_contrast=boost)
+        except Exception as e:
+            try:
+                if output_path.exists():
+                    output_path.unlink()
+            except:
+                pass
+            error = f"Failed to convert image: {e}"
+            return render_template("image_sketch.html", error=error)
+
+        if not output_path.exists():
+            error = "Sketch process completed but output file was not created."
+            return render_template("image_sketch.html", error=error)
+
+        flash(f"Sketch saved to downloads: {output_path.name}", "success")
+        return send_file(
+            str(output_path),
+            as_attachment=True,
+            download_name=output_path.name,
+            mimetype="image/png",
+        )
+
+    # GET
+    try:
+        counts = _count_dict() if "_count_dict" in globals() else {}
+    except Exception:
+        counts = {}
+    return render_template("image_sketch.html", error=error, message=message, counts=counts)
+
+def image_to_sketch(in_path: Path, out_path: Path, blur_radius: int = 15, boost_contrast: bool = False) -> None:
+    """
+    Convert image to a pencil-style sketch using a color-dodge blend:
+      sketch = gray * 255 / (255 - blur(gray))
+    Writes exactly to `out_path` (caller decides extension; we use .png).
+    """
+    with Image.open(in_path) as im:
+        im = im.convert("RGB")
+        gray = ImageOps.grayscale(im)
+
+        if boost_contrast:
+            gray = ImageOps.autocontrast(gray, cutoff=1)
+
+        blur = gray.filter(ImageFilter.GaussianBlur(radius=max(1, int(blur_radius))))
+
+        g = np.array(gray, dtype=np.float32)
+        b = np.array(blur, dtype=np.float32)
+
+        denom = 255.0 - b
+        denom[denom < 1] = 1  # avoid division by zero
+        dodge = (g * 255.0) / denom
+        dodge = np.clip(dodge, 0, 255).astype(np.uint8)
+
+        sketch = Image.fromarray(dodge, mode="L")
+        if boost_contrast:
+            sketch = ImageOps.autocontrast(sketch, cutoff=1)
+
+        # Save exactly to requested path (caller enforces .png)
+        out_path = out_path.with_suffix(".png")
+        sketch.save(out_path, format="PNG")
+
+
+# -------------------------
+# Image Background Remover
+# -------------------------
+@app.route("/image_background_remover", methods=["GET", "POST"])
+def image_background_remover():
+    """
+    GET: render the form
+    POST: save original -> uploads/<tool>/ ; process ; save PNG -> downloads/<tool>/
+          then AUTO-DOWNLOAD the new PNG (as attachment)
+    """
+    if request.method == "GET":
+        # plain render (no success flash/link)
+        return render_template("image_background_remover.html")
+
+    # ---- POST ----
+    f = request.files.get("image_file")
+    if not f or not f.filename:
+        return render_template("image_background_remover.html",
+                               error="Please choose an image file.")
+
+    if not allowed_image(f.filename):
+        return render_template("image_background_remover.html",
+                               error="Unsupported image format. Use PNG, JPG, JPEG, WEBP, or BMP.")
+
+    # Save original to uploads/<tool> (prefix with short uuid to avoid collisions)
+    orig_name = secure_filename(f.filename)
+    up_name = f"{uuid.uuid4().hex[:8]}_{orig_name}"
+    up_path = TOOL_UPLOAD_DIR / up_name
+    f.save(up_path)
+
+    # Read options
+    output_name = _safe_png_name(orig_name, request.form.get("output_name"))
+    method = (request.form.get("method") or "auto").lower().strip()
+    feather_edges = bool(request.form.get("feather_edges"))
+
+    # Process
+    try:
+        with Image.open(up_path) as im:
+            if method == "chroma":
+                hex_color = request.form.get("chroma_color", "#ffffff")
+                tol = int(request.form.get("chroma_tol", "25") or "25")
+                out_im = remove_background_chroma(
+                    im, bg_rgb=_hex_to_rgb(hex_color), tol=tol, feather=feather_edges
+                )
+            else:
+                out_im = remove_background_auto(im, feather=feather_edges)
+
+            out_im = out_im.convert("RGBA")
+
+        # Save to downloads/<tool>
+        out_name = f"{uuid.uuid4().hex[:6]}_{output_name}"
+        out_path = TOOL_DOWNLOAD_DIR / out_name
+        out_im.save(out_path, format="PNG")
+
+    except RuntimeError as e:
+        # e.g., 'rembg' not installed for Auto mode
+        return render_template("image_background_remover.html", error=str(e))
+    except Exception as e:
+        return render_template("image_background_remover.html", error=f"Failed to process image: {e}")
+
+    # ---- AUTO-DOWNLOAD ----
+    # Return the file directly so the browser downloads it without showing a success flash.
+    # Also increments your Downloads counter because it now exists under downloads/<tool>.
+    return send_from_directory(TOOL_DOWNLOAD_DIR, out_name, as_attachment=True, download_name=out_name)
+
 # --- add near your other constants ---
 TOOL_KEY = "image_background_remover"
 TOOL_UPLOAD_DIR = UPLOAD_DIR / TOOL_KEY
 TOOL_DOWNLOAD_DIR = DOWNLOAD_DIR / TOOL_KEY
-TOOL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-TOOL_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def _is_allowed_image(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALLOWED_IMG_EXTS
-
-
-# -----------------------
-# Utilities
-# -----------------------
 def _safe_png_name(orig_name: str, override: Optional[str]) -> str:
     """
     Build output filename (always .png).
@@ -1304,7 +1301,6 @@ def _safe_png_name(orig_name: str, override: Optional[str]) -> str:
     base = Path(secure_filename(orig_name)).stem
     return f"{base}_no-bg.png"
 
-
 def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     """
     Convert '#RRGGBB' or 'RRGGBB' to (R,G,B).
@@ -1317,7 +1313,6 @@ def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
     g = int(s[2:4], 16)
     b = int(s[4:6], 16)
     return (r, g, b)
-
 
 def remove_background_chroma(
     im: Image.Image,
@@ -1356,7 +1351,6 @@ def remove_background_chroma(
     rgba.putalpha(alpha)
     return rgba
 
-
 def remove_background_auto(im: Image.Image, feather: bool = False) -> Image.Image:
     """
     ML-based background removal via rembg (U^2-Net).
@@ -1380,83 +1374,8 @@ def remove_background_auto(im: Image.Image, feather: bool = False) -> Image.Imag
     return rgba
 
 
-# -----------------------
-# Routes
-# -----------------------
-@app.route("/downloads/<path:filename>")
-def serve_download(filename):
-    # Serves files from downloads/ for direct link in the template
-    return send_from_directory(DOWNLOAD_DIR, filename, as_attachment=True)
-
-
-@app.route("/image_background_remover", methods=["GET", "POST"])
-def image_background_remover():
-    """
-    GET: render the form
-    POST: save original -> uploads/<tool>/ ; process ; save PNG -> downloads/<tool>/
-          then AUTO-DOWNLOAD the new PNG (as attachment)
-    """
-    if request.method == "GET":
-        # plain render (no success flash/link)
-        return render_template("image_background_remover.html")
-
-    # ---- POST ----
-    f = request.files.get("image_file")
-    if not f or not f.filename:
-        return render_template("image_background_remover.html",
-                               error="Please choose an image file.")
-
-    if not _is_allowed_image(f.filename):
-        return render_template("image_background_remover.html",
-                               error="Unsupported image format. Use PNG, JPG, JPEG, WEBP, or BMP.")
-
-    # Save original to uploads/<tool> (prefix with short uuid to avoid collisions)
-    from werkzeug.utils import secure_filename
-    import uuid
-    orig_name = secure_filename(f.filename)
-    up_name = f"{uuid.uuid4().hex[:8]}_{orig_name}"
-    up_path = TOOL_UPLOAD_DIR / up_name
-    f.save(up_path)
-
-    # Read options
-    output_name = _safe_png_name(orig_name, request.form.get("output_name"))
-    method = (request.form.get("method") or "auto").lower().strip()
-    feather_edges = bool(request.form.get("feather_edges"))
-
-    # Process
-    try:
-        from PIL import Image
-        with Image.open(up_path) as im:
-            if method == "chroma":
-                hex_color = request.form.get("chroma_color", "#ffffff")
-                tol = int(request.form.get("chroma_tol", "25") or "25")
-                out_im = remove_background_chroma(
-                    im, bg_rgb=_hex_to_rgb(hex_color), tol=tol, feather=feather_edges
-                )
-            else:
-                out_im = remove_background_auto(im, feather=feather_edges)
-
-            out_im = out_im.convert("RGBA")
-
-        # Save to downloads/<tool>
-        out_name = f"{uuid.uuid4().hex[:6]}_{output_name}"
-        out_path = TOOL_DOWNLOAD_DIR / out_name
-        out_im.save(out_path, format="PNG")
-
-    except RuntimeError as e:
-        # e.g., 'rembg' not installed for Auto mode
-        return render_template("image_background_remover.html", error=str(e))
-    except Exception as e:
-        return render_template("image_background_remover.html", error=f"Failed to process image: {e}")
-
-    # ---- AUTO-DOWNLOAD ----
-    # Return the file directly so the browser downloads it without showing a success flash.
-    # Also increments your Downloads counter because it now exists under downloads/<tool>.
-    return send_from_directory(TOOL_DOWNLOAD_DIR, out_name, as_attachment=True, download_name=out_name)
-    
-
 # -------------------------
-# Uploads & Downloads library (tool cards + per-tool views)
+# Uploads & Downloads Routes
 # -------------------------
 def _count_dict():
     return {
@@ -1472,6 +1391,9 @@ def _count_dict():
     }
 
 
+# -------------------------
+# Uploads 
+# -------------------------
 @app.route("/uploads")
 def uploads_index():
     counts = {
@@ -1486,7 +1408,6 @@ def uploads_index():
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
-
 
 @app.route("/uploads/<tool>")
 def uploads_tool(tool):
@@ -1506,7 +1427,6 @@ def uploads_tool(tool):
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
-
 
 @app.route("/uploads/<tool>/<path:filename>")
 def view_upload(tool, filename):
@@ -1539,6 +1459,9 @@ def del_upload(tool, filename):
     return redirect(url_for("uploads_tool", tool=tool))
 
 
+# -------------------------
+# Downloads 
+# -------------------------
 @app.route("/downloads")
 def downloads_index():
     counts = {
@@ -1553,7 +1476,6 @@ def downloads_index():
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
-
 
 @app.route("/downloads/<tool>")
 def downloads_tool(tool):
@@ -1574,7 +1496,6 @@ def downloads_tool(tool):
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 
-
 @app.route("/downloads/<tool>/<path:filename>")
 def view_download(tool, filename):
     base = DOWNLOADS_BY_TOOL.get(tool)
@@ -1582,14 +1503,12 @@ def view_download(tool, filename):
         return ("Not found", 404)
     return send_from_directory(base, filename, as_attachment=False)
 
-
 @app.route("/downloads/<tool>/<path:filename>/download")
 def dl_download(tool, filename):
     base = DOWNLOADS_BY_TOOL.get(tool)
     if not base:
         return ("Not found", 404)
     return send_from_directory(base, filename, as_attachment=True)
-
 
 @app.route("/downloads/<tool>/<path:filename>/delete", methods=["POST"])
 def del_download(tool, filename):
