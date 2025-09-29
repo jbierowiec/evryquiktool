@@ -34,3 +34,6 @@ uploads/
 .env.local
 .env.production
 .env.development
+
+*cookies.txt
+*.b64
