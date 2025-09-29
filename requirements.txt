@@ -10,3 +10,6 @@ pikepdf>=9.0.0
 PyPDF2>=3.0.0
 faster-whisper>=1.0.0
 reportlab>=4.4.0
+rembg>=2.0,<3
+onnxruntime>=1.16,<2
+pooch>=1.8,<2

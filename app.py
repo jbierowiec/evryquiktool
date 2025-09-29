@@ -29,6 +29,8 @@ from flask import (
     send_from_directory, send_file, flash, Blueprint, current_app, 
 )
 
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
+
 # Optional dependencies 
 try:
     import yt_dlp  
