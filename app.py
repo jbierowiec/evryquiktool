@@ -6,6 +6,7 @@ import re
 import math
 import uuid
 import shlex
+import base64
 import pikepdf
 import subprocess
 import numpy as np
@@ -190,7 +191,17 @@ def _s_to_hms(sec: int) -> str:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
+COOKIE_PATH = Path(os.environ.get("YT_COOKIES_PATH", "/tmp/youtube_cookies.txt"))
 
+# If provided via base64 env var, write it once to /tmp
+_b64 = os.environ.get("YT_COOKIES_B64")
+if _b64:
+    try:
+        COOKIE_PATH.write_bytes(base64.b64decode(_b64))
+    except Exception:
+        # Don't crash the app if bad env input
+        pass
+    
 # -------------------------
 # Landing 
 # -------------------------
@@ -602,41 +613,60 @@ def sanitize_basename(name: str) -> str:
     # Fallback if empty
     return base or "video"
 
+def _common_opts(outtmpl: str) -> dict:
+    opts = {
+        "outtmpl": outtmpl,
+        "retries": 10,
+        "fragment_retries": 10,
+        "geo_bypass": True,
+        "socket_timeout": 30,
+        "force_ipv4": True,
+        "concurrent_fragment_downloads": 1,   # gentler on anti-bot
+        "noplaylist": True,
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17 Safari/605.1.15"
+            ),
+            "Accept-Language": "en-US,en;q=0.5",
+        },
+        "http_chunk_size": 10 * 1024 * 1024,
+    }
+
+    # If we have a cookie jar, use it (works on Railway)
+    try:
+        if COOKIE_PATH.exists() and COOKIE_PATH.stat().st_size > 0:
+            opts["cookiefile"] = str(COOKIE_PATH)
+    except Exception:
+        pass
+
+    return opts
+
 def build_opts(out_dir: Path, base: str, want: str) -> dict:
     outtmpl = str(out_dir / f"{base}.%(ext)s")
+    common = _common_opts(outtmpl)
 
     if want == "mp3":
-        return {
-            "outtmpl": outtmpl,
+        common.update({
             "format": "bestaudio/best",
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "0",
             }],
-            "retries": 10,
-            "fragment_retries": 10,
-            "geo_bypass": True,
-            "socket_timeout": 30,
-        }
+        })
+        return common
 
-    return {
-        "outtmpl": outtmpl,
+    common.update({
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bv*+ba/best",
         "merge_output_format": "mp4",
         "postprocessors": [{
             "key": "FFmpegVideoRemuxer",
             "preferedformat": "mp4",
         }],
-        "retries": 10,
-        "fragment_retries": 10,
-        "geo_bypass": True,
-        "socket_timeout": 30,
-        "force_ipv4": True,
-        "http_chunk_size": 10 * 1024 * 1024,           # 👈 fixed
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
-        # "cookiesfrombrowser": ("safari",),  # optional if still blocked
-    }
+    })
+    return common
 
 def find_final_file(out_dir: Path, base: str, want: str) -> Optional[Path]:
     """
