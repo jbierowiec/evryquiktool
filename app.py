@@ -8,6 +8,7 @@ import uuid
 import shlex
 import base64
 import pikepdf
+import zipfile
 import subprocess
 import numpy as np
 import shutil as _shutil
@@ -104,6 +105,7 @@ UPLOADS_BY_TOOL = {
     "image_combiner": UPLOAD_DIR / "image_combiner",
     "image_sketch": UPLOAD_DIR / "image_sketch",  
     "image_background_remover": UPLOAD_DIR / "image_background_remover",  
+    "image_to_puzzle": UPLOAD_DIR / "image_to_puzzle",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -116,6 +118,7 @@ DOWNLOADS_BY_TOOL = {
     "image_combiner": DOWNLOAD_DIR / "image_combiner",
     "image_sketch": DOWNLOAD_DIR / "image_sketch",   
     "image_background_remover": DOWNLOAD_DIR / "image_background_remover",  
+    "image_to_puzzle": DOWNLOAD_DIR / "image_to_puzzle",  
 }
 
 # Ensure folders exist
@@ -1440,6 +1443,99 @@ def remove_background_auto(im: Image.Image, feather: bool = False) -> Image.Imag
 
 
 # -------------------------
+# Image to Puzzle Converter
+# -------------------------
+@app.route("/image_to_puzzle", methods=["GET", "POST"])
+def image_to_puzzle():
+    TOOL = "image_to_puzzle"
+    try:
+        up_dir, down_dir = ensure_tool_dirs(TOOL)
+    except Exception as e:
+        return render_template("image_to_puzzle.html", error=f"Server misconfiguration: {e}")
+
+    if request.method == "GET":
+        recent = [
+            (name, url_for("dl_download", tool=TOOL, filename=name))
+            for name in list_files(down_dir)[:10] if name.lower().endswith(".zip")
+        ]
+        return render_template("image_to_puzzle.html", recent=recent)
+
+    # ---- POST (auto-download) ----
+    f = request.files.get("image_file")
+    rows_raw = (request.form.get("rows") or "").strip()
+    cols_raw = (request.form.get("cols") or "").strip()
+
+    if not f or not f.filename:
+        return render_template("image_to_puzzle.html", error="Please choose an image file.")
+    if not allowed_image(f.filename):
+        return render_template("image_to_puzzle.html",
+                               error="Unsupported image format. Use PNG/JPG/JPEG/WEBP/BMP.")
+
+    try:
+        rows = int(rows_raw); cols = int(cols_raw)
+    except ValueError:
+        return render_template("image_to_puzzle.html", error="Rows and columns must be integers.")
+    if rows < 1 or cols < 1:
+        return render_template("image_to_puzzle.html", error="Rows and columns must be ≥ 1.")
+    if rows * cols > 4000:  # safety guardrail
+        return render_template("image_to_puzzle.html", error="Please keep total pieces ≤ 4000.")
+
+    # Save original to uploads/<tool>/
+    orig_name = secure_filename(f.filename)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    saved_name = f"{stamp}__{orig_name}"
+    up_path = up_dir / saved_name
+    f.save(up_path)
+
+    # Open and slice
+    try:
+        im = Image.open(up_path).convert("RGBA")
+    except Exception as e:
+        return render_template("image_to_puzzle.html", error=f"Could not open image: {e}")
+
+    W, H = im.size
+    w_base, w_rem = divmod(W, cols)
+    h_base, h_rem = divmod(H, rows)
+
+    base = Path(orig_name).stem
+    pieces_dir = down_dir / f"{base}_{rows}x{cols}__pieces"
+    if pieces_dir.exists():
+        _shutil.rmtree(pieces_dir)
+    pieces_dir.mkdir(parents=True, exist_ok=True)
+
+    y = 0
+    for r in range(rows):
+        tile_h = h_base + (1 if r < h_rem else 0)
+        x = 0
+        for c in range(cols):
+            tile_w = w_base + (1 if c < w_rem else 0)
+            im.crop((x, y, x + tile_w, y + tile_h)).save(
+                pieces_dir / f"r{r+1:03d}_c{c+1:03d}.png"
+            )
+            x += tile_w
+        y += tile_h
+
+    # Make ZIP in downloads/<tool>/
+    zip_name = f"{base}_{rows}x{cols}.zip"
+    zip_path = down_dir / zip_name
+    if zip_path.exists():
+        zip_path.unlink()
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        root = f"{base}_{rows}x{cols}"
+        for p in sorted(pieces_dir.iterdir()):
+            zf.write(p, arcname=f"{root}/{p.name}")
+
+    # Optionally clean up the intermediate folder:
+    # _shutil.rmtree(pieces_dir)
+
+    # AUTO-DOWNLOAD: return the file directly (file is already saved in downloads/)
+    return send_from_directory(
+        down_dir, zip_name, as_attachment=True, download_name=zip_name, mimetype="application/zip"
+    )
+
+
+# -------------------------
 # Uploads & Downloads Routes
 # -------------------------
 def _count_dict():
@@ -1453,6 +1549,7 @@ def _count_dict():
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
+        "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
     }
 
 
@@ -1471,6 +1568,7 @@ def uploads_index():
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
+        "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1490,6 +1588,7 @@ def uploads_tool(tool):
         "image_combiner": len(list_files(UPLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
+        "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1539,6 +1638,7 @@ def downloads_index():
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
+        "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1558,6 +1658,7 @@ def downloads_tool(tool):
         "image_combiner": len(list_files(DOWNLOADS_BY_TOOL["image_combiner"])),
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
+        "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 

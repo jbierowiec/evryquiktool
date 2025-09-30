@@ -188,6 +188,27 @@
       </div>
     </div>
   </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">Image to Puzzle Converter</h5>
+        <p class="text-muted mb-3">
+          Any image uploaded before converting it to puzzle pieces.
+        </p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.image_to_puzzle }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('uploads_tool', tool='image_to_puzzle') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 {% else %}

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <h3 class="mb-1">Image → Puzzle (ZIP)</h3>
+  <p class="text-muted mb-4">
+    Upload an image and choose how many <strong>rows</strong> and <strong>columns</strong> to slice it into.
+    We’ll generate all pieces and return a <code>.zip</code> file. Your original goes to
+    <code>uploads/</code> and the ZIP to <code>downloads/</code>.
+  </p>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if message %}
+    <div class="alert alert-success">
+      {{ message|safe }}
+      {% if file_url %}
+        <div class="mt-2">
+          <a class="btn btn-success" href="{{ file_url }}" download>
+            ⬇️ Download ZIP
+          </a>
+          {% if file_name %}
+            <span class="ms-2 text-muted">{{ file_name }}</span>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="mb-4">
+    <div class="row g-4">
+      <div class="col-lg-7">
+        <div class="mb-3">
+          <label class="form-label">Image File</label>
+          <input
+            class="form-control"
+            type="file"
+            name="image_file"
+            accept=".png,.jpg,.jpeg,.webp,.bmp,image/png,image/jpeg,image/webp,image/bmp"
+            required
+          />
+          <div class="form-text">
+            Common formats supported. Extremely large images are fine but may take longer to process.
+          </div>
+        </div>
+
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Rows</label>
+            <input
+              class="form-control"
+              type="number"
+              name="rows"
+              min="1"
+              max="200"
+              step="1"
+              value="{{ request.form.rows or 5 }}"
+              required
+            />
+            <div class="form-text">Number of horizontal slices.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Columns</label>
+            <input
+              class="form-control"
+              type="number"
+              name="cols"
+              min="1"
+              max="200"
+              step="1"
+              value="{{ request.form.cols or 5 }}"
+              required
+            />
+            <div class="form-text">Number of vertical slices.</div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary mt-3">
+          Create Puzzle &amp; Download ZIP
+        </button>
+
+        <div class="form-text mt-2">
+          Tip: A 5×5 grid makes 25 pieces; 40×25 makes 1000 pieces.
+        </div>
+      </div>
+    </div>
+    <hr />
+  </form>
+</div>
+{% endblock %}
