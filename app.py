@@ -219,6 +219,14 @@ def landing():
 
 
 # -------------------------
+# Landing 
+# -------------------------
+@app.route("/privacy_policy")
+def privacy_policy():
+    return render_template("privacy_policy.html")
+
+
+# -------------------------
 # PDF Decrypter
 # -------------------------
 @app.route("/pdf_decrypter", methods=["GET", "POST"])

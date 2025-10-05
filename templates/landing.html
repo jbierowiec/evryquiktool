@@ -93,10 +93,10 @@
           <ul class="navbar-nav ms-auto">
             <li class="nav-item"><a class="nav-link" href="#home">Home</a></li>
             <li class="nav-item">
-              <a class="nav-link" href="#tools">Our tools</a>
+              <a class="nav-link" href="#tools">Our Tools</a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="#contact">Contact us</a>
+              <a class="nav-link" href="#contact">Contact Us</a>
             </li>
           </ul>
         </div>
@@ -395,38 +395,7 @@
               </div>
             </div>
           </div>
-
-          <!--
-        <div class="col">
-          <div class="card tool-card h-100">
-            <div class="card-body">
-              <h5 class="card-title">Compress</h5>
-              <p class="card-text text-muted">Reduce file size for faster sharing.</p>
-              <button class="btn btn-primary btn-sm" disabled>Soon</button>
-            </div>
-          </div>
         </div>
-
-        <div class="col">
-          <div class="card tool-card h-100">
-            <div class="card-body">
-              <h5 class="card-title">PDF → Images</h5>
-              <p class="card-text text-muted">Turn each PDF page into an image.</p>
-              <button class="btn btn-primary btn-sm" disabled>Soon</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="col">
-          <div class="card tool-card h-100">
-            <div class="card-body">
-              <h5 class="card-title">Images → PDF</h5>
-              <p class="card-text text-muted">Combine multiple images into a single PDF.</p>
-              <button class="btn btn-primary btn-sm" disabled>Soon</button>
-            </div>
-          </div>
-        </div>
-        --></div>
       </div>
     </section>
 
@@ -482,9 +451,28 @@
     <!-- Sticky dark footer -->
     <footer class="sticky-footer bg-dark text-light py-4">
       <div class="container text-center">
-        © <span id="year"></span> evryquiktool
+        <div class="mb-2">
+          <a href="#home" class="text-light text-decoration-none mx-2">Home</a>
+          |
+          <a href="#tools" class="text-light text-decoration-none mx-2"
+            >Our Tools</a
+          >
+          |
+          <a href="#contact" class="text-light text-decoration-none mx-2"
+            >Contact Us</a
+          >
+          |
+          <a href="/privacy_policy" class="text-light text-decoration-none mx-2"
+            >Privacy Policy</a
+          >
+        </div>
+        <div>© <span id="year"></span> evryquiktool</div>
       </div>
     </footer>
+
+    <script>
+      document.getElementById("year").textContent = new Date().getFullYear();
+    </script>
 
     <script>
       document.getElementById("year").textContent = new Date().getFullYear();
