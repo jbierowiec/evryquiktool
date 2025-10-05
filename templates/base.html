@@ -189,6 +189,13 @@
           </li>
           <li class="nav-item">
             <a
+              class="nav-link {{ 'active' if request.path.startswith('/pdf_splitter') else '' }}"
+              href="{{ url_for('pdf_splitter') }}"
+              >PDF Splitter</a
+            >
+          </li>
+          <li class="nav-item">
+            <a
               class="nav-link {{ 'active' if request.path.startswith('/yt_vid_downloader') else '' }}"
               href="{{ url_for('yt_vid_downloader') }}"
               >YouTube Video Downloader</a
@@ -294,6 +301,13 @@
             class="nav-link {{ 'active' if request.path.startswith('/pdf_combiner') else '' }}"
             href="{{ url_for('pdf_combiner') }}"
             >PDF Combiner</a
+          >
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/pdf_splitter') else '' }}"
+            href="{{ url_for('pdf_splitter') }}"
+            >PDF Splitter</a
           >
         </li>
         <li class="nav-item">

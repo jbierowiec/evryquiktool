@@ -1,0 +1,56 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">PDF Splitter</h3>
+
+  <p class="text-muted">
+    Upload a single PDF and we’ll split it into one PDF per page, package them
+    into a ZIP, save it to <code>downloads/pdf_splitter/</code>, and
+    <strong>download it automatically</strong>.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <h6>Tips</h6>
+  <ul>
+    <li>Supported format: <code>.pdf</code> only.</li>
+    <li>The ZIP filename can be customized with the optional base name.</li>
+    <li>
+      The individual page PDFs are inside the ZIP (we keep just the ZIP in
+      <code>downloads/</code>).
+    </li>
+  </ul>
+
+  <form method="post" enctype="multipart/form-data" class="mb-3">
+    <div class="mb-3">
+      <label class="form-label">PDF file</label>
+      <input
+        class="form-control"
+        type="file"
+        name="pdf_file"
+        accept="application/pdf"
+        required
+      />
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Output base name (optional)</label>
+      <input
+        type="text"
+        class="form-control"
+        name="output_base"
+        placeholder="my_document"
+      />
+      <div class="form-text">
+        We’ll name pages like <code>my_document_p01.pdf</code>, and the ZIP like
+        <code>my_document_pages_YYYYMMDD_HHMMSS.zip</code>.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Split PDF</button>
+  </form>
+
+  <hr />
+</div>
+{% endblock %}

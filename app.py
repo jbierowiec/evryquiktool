@@ -99,6 +99,7 @@ UPLOADS_BY_TOOL = {
     "pdf_decrypter": UPLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": UPLOAD_DIR / "pdf_encrypter",
     "pdf_combiner": UPLOAD_DIR / "pdf_combiner",  
+    "pdf_splitter": UPLOAD_DIR / "pdf_splitter", 
     "yt_vid_downloader": UPLOAD_DIR / "yt_vid_downloader",
     "video_cropper": UPLOAD_DIR / "video_cropper",
     "audio_to_text": UPLOAD_DIR / "audio_to_text",  
@@ -112,6 +113,7 @@ DOWNLOADS_BY_TOOL = {
     "pdf_decrypter": DOWNLOAD_DIR / "pdf_decrypter",
     "pdf_encrypter": DOWNLOAD_DIR / "pdf_encrypter",
     "pdf_combiner": DOWNLOAD_DIR / "pdf_combiner",  
+    "pdf_splitter": DOWNLOAD_DIR / "pdf_splitter", 
     "yt_vid_downloader": DOWNLOAD_DIR / "yt_vid_downloader",
     "video_cropper": DOWNLOAD_DIR / "video_cropper", 
     "audio_to_text": DOWNLOAD_DIR / "audio_to_text", 
@@ -128,12 +130,11 @@ for p in [UPLOAD_DIR, DOWNLOAD_DIR, *UPLOADS_BY_TOOL.values(), *DOWNLOADS_BY_TOO
 ALLOWED_PDF_EXT = {".pdf"}
 ALLOWED_IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 ALLOWED_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
-MAX_FILES = 10
 ALLOWED_MEDIA_EXTS = {
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma", ".amr",
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"
 }
-
+MAX_FILES = 10
 
 # -------------------------
 # Utility Functions
@@ -536,6 +537,118 @@ def pdf_combiner():
                      as_attachment=True,
                      download_name=out_name,
                      max_age=0)
+    
+
+# -----------------------------
+# PDF Splitter
+# -----------------------------
+def _safe_basename(name: str) -> str:
+    base = Path((name or "").strip()).stem
+    base = secure_filename(base)
+    return base or "document"
+
+def _split_pdf_to_pages(src_pdf_path: Path, tmp_out_dir: Path, out_base: str) -> list[Path]:
+    """
+    Split PDF into one-page PDFs using pikepdf.
+    Returns a list of created file paths.
+    """
+    created = []
+    with pikepdf.Pdf.open(src_pdf_path) as pdf:
+        total = len(pdf.pages)
+        for i in range(total):
+            new_pdf = pikepdf.Pdf.new()
+            new_pdf.pages.append(pdf.pages[i])
+            # 1-based page index in filenames
+            page_num = i + 1
+            out_path = tmp_out_dir / f"{out_base}_p{page_num:02d}.pdf"
+            new_pdf.save(out_path)
+            created.append(out_path)
+    return created
+
+def _zip_files(file_paths: list[Path], zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for p in file_paths:
+            # store only the filename inside the zip
+            zf.write(p, arcname=p.name)
+
+@app.route("/pdf_splitter", methods=["GET", "POST"])
+def pdf_splitter():
+    """
+    Upload a single PDF and receive a ZIP containing individual page PDFs.
+    The ZIP is also saved to downloads/pdf_splitter/.
+    """
+    if request.method == "GET":
+        return render_template("pdf_splitter.html")
+
+    # POST
+    upfile = request.files.get("pdf_file")
+    out_name_raw = request.form.get("output_base") or ""  # optional base for files/zip
+
+    if not upfile or upfile.filename.strip() == "":
+        return render_template("pdf_splitter.html", error="Please choose a .pdf file to upload.")
+
+    ext = Path(upfile.filename).suffix.lower()
+    if ext not in ALLOWED_PDF_EXT:
+        return render_template("pdf_splitter.html", error="Only .pdf files are supported.")
+
+    # Save the uploaded PDF
+    upload_id = uuid.uuid4().hex[:8]
+    safe_upname = secure_filename(Path(upfile.filename).name)
+    src_pdf_path = UPLOAD_DIR / "pdf_splitter" / f"{Path(safe_upname).stem}_{upload_id}.pdf"
+    upfile.save(src_pdf_path)
+
+    # Create a temp working folder for page PDFs
+    tmp_dir = BASE / f"_split_tmp_{upload_id}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Determine base for output names
+        base_for_pages = _safe_basename(out_name_raw) or Path(safe_upname).stem
+        # Split
+        page_files = _split_pdf_to_pages(src_pdf_path, tmp_dir, base_for_pages)
+        if not page_files:
+            return render_template("pdf_splitter.html", error="No pages found in the PDF.")
+
+        # Build a ZIP name and save under downloads/pdf_splitter
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_base = _safe_basename(out_name_raw) or Path(safe_upname).stem
+        zip_name = f"{zip_base}_pages_{ts}.zip"
+        zip_save_dir = DOWNLOAD_DIR / "pdf_splitter"
+        zip_save_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = zip_save_dir / zip_name
+
+        _zip_files(page_files, zip_path)
+
+        # Optional: clean up the temp single-page PDFs (we keep only the ZIP in downloads)
+        for p in page_files:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            tmp_dir.rmdir()
+        except Exception:
+            pass
+
+        # Automatically download: return file directly as attachment.
+        # (This ALSO keeps a copy saved under downloads/pdf_splitter/)
+        return send_file(
+            zip_path,
+            as_attachment=True,
+            download_name=zip_name,
+            mimetype="application/zip",
+            max_age=0,
+        )
+
+    except Exception as e:
+        # Best-effort cleanup
+        try:
+            for p in tmp_dir.glob("*"):
+                p.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except Exception:
+            pass
+        return render_template("pdf_splitter.html", error=f"Error splitting PDF: {e}")
     
 
 # -------------------------
@@ -1543,6 +1656,7 @@ def _count_dict():
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "pdf_splitter": len(list_files(DOWNLOADS_BY_TOOL["pdf_splitter"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
@@ -1562,6 +1676,7 @@ def uploads_index():
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
+        "pdf_splitter": len(list_files(UPLOADS_BY_TOOL["pdf_splitter"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])), 
         "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])), 
@@ -1582,6 +1697,7 @@ def uploads_tool(tool):
         "pdf_decrypter": len(list_files(UPLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(UPLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(UPLOADS_BY_TOOL["pdf_combiner"])),
+        "pdf_splitter": len(list_files(UPLOADS_BY_TOOL["pdf_splitter"])),
         "yt_vid_downloader": len(list_files(UPLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(UPLOADS_BY_TOOL["video_cropper"])),  
         "audio_to_text": len(list_files(UPLOADS_BY_TOOL["audio_to_text"])),
@@ -1632,6 +1748,7 @@ def downloads_index():
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "pdf_splitter": len(list_files(DOWNLOADS_BY_TOOL["pdf_splitter"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
@@ -1652,6 +1769,7 @@ def downloads_tool(tool):
         "pdf_decrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_decrypter"])),
         "pdf_encrypter": len(list_files(DOWNLOADS_BY_TOOL["pdf_encrypter"])),
         "pdf_combiner": len(list_files(DOWNLOADS_BY_TOOL["pdf_combiner"])),
+        "pdf_splitter": len(list_files(DOWNLOADS_BY_TOOL["pdf_splitter"])),
         "yt_vid_downloader": len(list_files(DOWNLOADS_BY_TOOL["yt_vid_downloader"])),
         "video_cropper": len(list_files(DOWNLOADS_BY_TOOL["video_cropper"])),
         "audio_to_text": len(list_files(DOWNLOADS_BY_TOOL["audio_to_text"])),
