@@ -236,6 +236,13 @@
               >Image to Puzzle Converter</a
             >
           </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/zipper') else '' }}"
+              href="{{ url_for('zipper') }}"
+              >File Compressor</a
+            >
+          </li>
         </ul>
 
         <!-- Library (Uploads/Downloads/Go Back) preserved exactly -->
@@ -357,6 +364,13 @@
             class="nav-link {{ 'active' if request.path.startswith('/image_to_puzzle') else '' }}"
             href="{{ url_for('image_to_puzzle') }}"
             >Image to Puzzle Converter</a
+          >
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/zipper') else '' }}"
+            href="{{ url_for('zipper') }}"
+            >File Compressor</a
           >
         </li>
       </ul>

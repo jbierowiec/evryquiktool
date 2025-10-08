@@ -1,0 +1,225 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">File Compressor / Zipper</h3>
+
+  <p class="text-muted">
+    Select as many files as you want. When ready, click
+    <strong>Compress</strong>. Your files will be saved to
+    <code>uploads/</code>, a ZIP will be created in <code>downloads/</code>, and
+    the ZIP will download immediately.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
+
+  <h6>Tips</h6>
+  <ul>
+    <li>You can select multiple files at once or add more later.</li>
+    <li>
+      Uploads are saved under their original names (collisions get a numeric
+      suffix).
+    </li>
+    <li>
+      ZIPs are stored in <code>downloads/</code> and will show up on the
+      Downloads page.
+    </li>
+  </ul>
+
+  <form method="post" enctype="multipart/form-data" id="zipForm" class="mb-3">
+    <!-- Output name -->
+    <div class="mb-3">
+      <label class="form-label">Output ZIP file name (optional)</label>
+      <input
+        type="text"
+        class="form-control"
+        id="output_name"
+        name="output_name"
+        placeholder="my_archive.zip"
+      />
+      <div class="form-text">
+        If left blank, we’ll generate a timestamped name.
+      </div>
+    </div>
+
+    <!-- File picker -->
+    <div class="mb-3">
+      <label class="form-label">Select files</label>
+      <input
+        class="form-control"
+        id="files"
+        name="files"
+        type="file"
+        multiple
+      />
+      <div class="form-text">
+        You can pick more than once; all selections will be included.
+      </div>
+    </div>
+
+    <!-- Drag & drop zone (optional but nice) -->
+    <div
+      id="dropZone"
+      class="border border-2 rounded p-4 text-center mb-3 bg-light-subtle"
+    >
+      <i class="bi bi-cloud-arrow-up fs-1 d-block mb-2"></i>
+      <div class="fw-semibold">Drag & drop files here</div>
+      <small class="text-muted"
+        >They will be added to the selection above.</small
+      >
+    </div>
+
+    <!-- Selected files preview -->
+    <div class="mb-3">
+      <label class="form-label">Files to compress</label>
+      <ul id="fileList" class="list-group small"></ul>
+      <div class="form-text">
+        Max shown here is a preview; all picked files are submitted.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Compress</button>
+  </form>
+
+  <hr />
+</div>
+
+<script>
+  (function () {
+    // We’ll keep a live list of File objects user intends to upload.
+    // Because browsers don’t let us programmatically mutate <input.files>,
+    // we’ll manage a side buffer and rebuild a FormData on submit.
+    const buffer = [];
+    const fileInput = document.getElementById("files");
+    const fileList = document.getElementById("fileList");
+    const form = document.getElementById("zipForm");
+    const dropZone = document.getElementById("dropZone");
+
+    function addFiles(fileListLike) {
+      for (const f of fileListLike) {
+        if (!f || !f.name) continue;
+        buffer.push(f);
+      }
+      renderList();
+    }
+
+    function renderList() {
+      fileList.innerHTML = "";
+      if (buffer.length === 0) {
+        const li = document.createElement("li");
+        li.className = "list-group-item";
+        li.textContent = "No files selected yet.";
+        fileList.appendChild(li);
+        return;
+      }
+      buffer.forEach((f, idx) => {
+        const li = document.createElement("li");
+        li.className =
+          "list-group-item d-flex justify-content-between align-items-center";
+        li.innerHTML = `
+        <span class="text-truncate" style="max-width: 75%;">${f.name}</span>
+        <button type="button" class="btn btn-sm btn-outline-danger" data-idx="${idx}">
+          Remove
+        </button>
+      `;
+        fileList.appendChild(li);
+      });
+    }
+
+    fileInput.addEventListener("change", (e) => {
+      addFiles(e.target.files || []);
+      // Clear the real input so the same file can be re-added later if needed
+      fileInput.value = "";
+    });
+
+    fileList.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-idx]");
+      if (!btn) return;
+      const idx = parseInt(btn.getAttribute("data-idx"), 10);
+      if (!isNaN(idx) && buffer[idx]) {
+        buffer.splice(idx, 1);
+        renderList();
+      }
+    });
+
+    // Drag & drop
+    ["dragenter", "dragover"].forEach((evt) =>
+      dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add("border-primary");
+      })
+    );
+    ["dragleave", "drop"].forEach((evt) =>
+      dropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove("border-primary");
+      })
+    );
+    dropZone.addEventListener("drop", (e) => {
+      const dt = e.dataTransfer;
+      if (dt && dt.files) addFiles(dt.files);
+    });
+
+    // Intercept submit to assemble a FormData with our buffered files
+    form.addEventListener("submit", (e) => {
+      if (buffer.length === 0) {
+        e.preventDefault();
+        alert("Please select at least one file to compress.");
+        return;
+      }
+
+      // Build a new FormData manually including all buffered files + output_name
+      const fd = new FormData();
+      const outputName = document.getElementById("output_name").value || "";
+      fd.append("output_name", outputName);
+
+      // Use the same field name 'files' repeatedly—Flask can read with getlist("files")
+      buffer.forEach((f) => fd.append("files", f, f.name));
+
+      // POST via fetch so we can let the browser auto-download the response (attachment)
+      // by turning the response into a Blob and creating a temp link.
+      e.preventDefault();
+      fetch('{{ url_for("zipper") }}', {
+        method: "POST",
+        body: fd,
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(txt || "Compression failed.");
+          }
+          // We expect a ZIP attachment; fetch as Blob and force a client-side download
+          const blob = await res.blob();
+          const a = document.createElement("a");
+          const url = window.URL.createObjectURL(blob);
+          a.href = url;
+
+          // Try to honor server-provided filename; fallback to output_name or 'archive.zip'
+          const dispo = res.headers.get("Content-Disposition") || "";
+          const m = dispo.match(
+            /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i
+          );
+          const inferred = decodeURIComponent(
+            m?.[1] || m?.[2] || outputName || "archive.zip"
+          );
+          a.download = inferred.endsWith(".zip") ? inferred : inferred + ".zip";
+
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+        })
+        .catch((err) => {
+          alert(err.message || err.toString());
+        });
+    });
+
+    // Initial state
+    renderList();
+  })();
+</script>
+{% endblock %}

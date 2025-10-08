@@ -107,6 +107,7 @@ UPLOADS_BY_TOOL = {
     "image_sketch": UPLOAD_DIR / "image_sketch",  
     "image_background_remover": UPLOAD_DIR / "image_background_remover",  
     "image_to_puzzle": UPLOAD_DIR / "image_to_puzzle",  
+    "zipper": UPLOAD_DIR / "zipper",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -121,6 +122,7 @@ DOWNLOADS_BY_TOOL = {
     "image_sketch": DOWNLOAD_DIR / "image_sketch",   
     "image_background_remover": DOWNLOAD_DIR / "image_background_remover",  
     "image_to_puzzle": DOWNLOAD_DIR / "image_to_puzzle",  
+    "zipper": DOWNLOAD_DIR / "zipper",  
 }
 
 # Ensure folders exist
@@ -1676,6 +1678,91 @@ def _count_dict():
 
 
 # -------------------------
+# File Compressor / Zipper
+# -------------------------
+@app.route("/zipper", methods=["GET", "POST"])
+def zipper():
+    """
+    GET  -> render the Zipper tool page
+    POST -> save all uploaded files to uploads/, create a .zip in downloads/,
+            and immediately return the ZIP as a download
+    """
+    MAX_FILES = 500  # purely a UI hint; the input is 'multiple' so this isn't enforced server-side
+
+    if request.method == "GET":
+        return render_template("zipper.html", max_files=MAX_FILES)
+
+    # POST
+    files = request.files.getlist("files")
+    output_name = (request.form.get("output_name") or "").strip()
+
+    # Basic validation
+    if not files or all((f.filename or "").strip() == "" for f in files):
+        return render_template(
+            "zipper.html",
+            max_files=MAX_FILES,
+            error="Please choose at least one file to compress."
+        )
+
+    # Save each upload to uploads/, resolving collisions by appending counters
+    saved_paths = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        raw_name = secure_filename(f.filename)
+        if not raw_name:
+            continue
+
+        dest = UPLOAD_DIR / "zipper" / raw_name
+        # Avoid overwriting: add -1, -2, ... if needed
+        if dest.exists():
+            stem = dest.stem
+            suffix = dest.suffix
+            counter = 1
+            while True:
+                candidate = UPLOAD_DIR / "zipper" / f"{stem}-{counter}{suffix}"
+                if not candidate.exists():
+                    dest = candidate
+                    break
+                counter += 1
+
+        f.save(dest)
+        saved_paths.append(dest)
+
+    if not saved_paths:
+        return render_template(
+            "zipper.html",
+            max_files=MAX_FILES,
+            error="No valid files were received."
+        )
+
+    # Build ZIP filename
+    if not output_name:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_name = f"compressed_{ts}.zip"
+    if not output_name.lower().endswith(".zip"):
+        output_name += ".zip"
+
+    zip_path = DOWNLOAD_DIR / "zipper" / output_name
+
+    # Create the ZIP (store each file under its basename)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for p in saved_paths:
+            # arcname keeps the zip clean (no full paths)
+            zf.write(p, arcname=p.name)
+
+    # Important: returning send_file triggers the browser's download immediately.
+    # The file is already saved in downloads/, so it will also appear on your "Downloads" page.
+    return send_file(
+        zip_path,
+        as_attachment=True,
+        download_name=output_name,
+        mimetype="application/zip",
+        max_age=0,
+    )
+
+
+# -------------------------
 # Uploads 
 # -------------------------
 @app.route("/uploads")
@@ -1692,6 +1779,7 @@ def uploads_index():
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
+        "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1713,6 +1801,7 @@ def uploads_tool(tool):
         "image_sketch": len(list_files(UPLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
+        "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1764,6 +1853,7 @@ def downloads_index():
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
+        "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1785,6 +1875,7 @@ def downloads_tool(tool):
         "image_sketch": len(list_files(DOWNLOADS_BY_TOOL["image_sketch"])),
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
+        "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 
