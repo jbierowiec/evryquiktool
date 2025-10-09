@@ -4,6 +4,7 @@ import io
 import os
 import re
 import math
+import time
 import uuid
 import shlex
 import base64
@@ -29,6 +30,8 @@ from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, abort,
 )
+import qrcode
+from qrcode.image.svg import SvgImage
 
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
 
@@ -108,6 +111,7 @@ UPLOADS_BY_TOOL = {
     "image_background_remover": UPLOAD_DIR / "image_background_remover",  
     "image_to_puzzle": UPLOAD_DIR / "image_to_puzzle",  
     "zipper": UPLOAD_DIR / "zipper",  
+    "qr_code": UPLOAD_DIR / "qr_code",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -123,6 +127,7 @@ DOWNLOADS_BY_TOOL = {
     "image_background_remover": DOWNLOAD_DIR / "image_background_remover",  
     "image_to_puzzle": DOWNLOAD_DIR / "image_to_puzzle",  
     "zipper": DOWNLOAD_DIR / "zipper",  
+    "qr_code": DOWNLOAD_DIR / "qr_code",  
 }
 
 # Ensure folders exist
@@ -1762,6 +1767,142 @@ def zipper():
     )
 
 
+QR_UPLOAD_DIR: Path = UPLOADS_BY_TOOL["qr_code"]
+QR_DOWNLOAD_DIR: Path = DOWNLOADS_BY_TOOL["qr_code"]
+QR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+QR_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# -------------------------
+# Helpers
+# -------------------------
+_filename_cleanup = re.compile(r"[^A-Za-z0-9._-]+")
+
+def unique_name(base: str, ext: str) -> str:
+    """Make a unique filename like 'base-YYYYmmdd-HHMMSS-<shortuuid>.ext'."""
+    base = _filename_cleanup.sub("-", base).strip("-") or "file"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    uid = uuid.uuid4().hex[:8]
+    return f"{base}-{stamp}-{uid}.{ext.lstrip('.')}"
+
+def save_unique(file_storage, dest_dir: Path) -> str:
+    """Save an uploaded FileStorage to dest_dir with a unique, sanitized name."""
+    raw = secure_filename(file_storage.filename or "upload.bin") or "upload.bin"
+    root, ext = os.path.splitext(raw)
+    fname = unique_name(root or "upload", ext or ".bin")
+    file_storage.save(dest_dir / fname)
+    return fname
+
+def gen_qr_png_and_svg(data: str, base: str) -> tuple[str, str]:
+    """
+    Generate a QR in PNG and SVG under the qr_code downloads dir.
+    Returns (png_name, svg_name).
+    """
+    base = _filename_cleanup.sub("-", base).strip("-") or "qr"
+    png_name = unique_name(base, ".png")
+    svg_name = unique_name(base, ".svg")
+
+    # PNG (raster)
+    img = qrcode.make(data)  # PIL image
+    img.save(QR_DOWNLOAD_DIR / png_name)
+
+    # SVG (vector, scalable)
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data(data)
+    qr.make(fit=True)
+    svg_img = qr.make_image(image_factory=SvgImage)
+    svg_img.save(str(QR_DOWNLOAD_DIR / svg_name))
+
+    return png_name, svg_name
+
+# In-memory map for quick download by token (no re-gen needed)
+_QR_CACHE: dict[str, dict] = {}
+
+# -------------------------
+# Routes
+# -------------------------
+@app.route("/qr_code", methods=["GET", "POST"])
+def qr_code():
+    """
+    GET: render form
+    POST: accept file or link, save upload (if given), generate QR,
+          save QR files to downloads, show preview + embed + download actions.
+    """
+    if request.method == "GET":
+        return render_template("qr_code.html")
+
+    # POST flow
+    link = (request.form.get("link") or "").strip()
+    file = request.files.get("file")
+    qr_name = (request.form.get("qr_name") or "").strip()
+
+    data_target = None
+    uploaded_name = None
+
+    # If a file is provided -> save to uploads/qr_code and point QR to its public URL
+    if file and getattr(file, "filename", ""):
+        try:
+            uploaded_name = save_unique(file, QR_UPLOAD_DIR)
+        except Exception as e:
+            return render_template("qr_code.html", error=f"Upload failed: {e}")
+        # Important: use your existing 'view_upload' endpoint and include tool='qr_code'
+        data_target = url_for("view_upload", tool="qr_code", filename=uploaded_name, _external=True)
+
+    # Otherwise, fall back to the pasted link
+    if not data_target:
+        if not link:
+            return render_template("qr_code.html", error="Please upload a file or paste a link.")
+        data_target = link
+
+    # Base name for QR output files
+    base = qr_name or (uploaded_name or "qr")
+
+    # Generate & save both PNG and SVG into downloads/qr_code
+    try:
+        png_name, svg_name = gen_qr_png_and_svg(data_target, base)
+    except Exception as e:
+        return render_template("qr_code.html", error=f"QR generation failed: {e}")
+
+    # Cache for download-by-token (files are already on disk in downloads/qr_code)
+    token = uuid.uuid4().hex
+    _QR_CACHE[token] = {
+        "data": data_target,
+        "png_name": png_name,
+        "svg_name": svg_name,
+    }
+
+    # Render with preview + embed + download buttons
+    return render_template(
+        "qr_code.html",
+        qr={
+            "token": token,
+            "data": data_target,
+            "png_name": png_name,
+            "svg_name": svg_name,
+        },
+        message="QR created and saved under downloads/."
+    )
+
+@app.route("/qr_code/download/<token>.<fmt>")
+def qr_download(token: str, fmt: str):
+    """
+    Serve the chosen QR format as an attachment (auto-download).
+    These files are already saved under downloads/qr_code, so they appear on your Downloads page.
+    """
+    item = _QR_CACHE.get(token)
+    if not item:
+        abort(404, description="Unknown or expired QR session.")
+
+    if fmt == "png":
+        fname = item["png_name"]
+    elif fmt == "svg":
+        fname = item["svg_name"]
+    else:
+        abort(400, description="Unsupported format.")
+
+    # Force download; served from the qr_code tool directory
+    return send_from_directory(QR_DOWNLOAD_DIR, fname, as_attachment=True)
+
+
 # -------------------------
 # Uploads 
 # -------------------------
@@ -1780,6 +1921,7 @@ def uploads_index():
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
+        "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1802,6 +1944,7 @@ def uploads_tool(tool):
         "image_background_remover": len(list_files(UPLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
+        "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1854,6 +1997,7 @@ def downloads_index():
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
+        "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -1876,6 +2020,7 @@ def downloads_tool(tool):
         "image_background_remover": len(list_files(DOWNLOADS_BY_TOOL["image_background_remover"])),
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
+        "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 

@@ -1,0 +1,164 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">QR Code Generator</h3>
+
+  <p class="text-muted">
+    Upload <em>anything</em> (image, file, etc.) or paste a link. When you click
+    <strong>Generate QR Code</strong>, we’ll:
+  </p>
+  <ul>
+    <li>
+      Save uploaded files into <code>uploads/</code> so they appear on your
+      Uploads page,
+    </li>
+    <li>Create a QR that points to that file (or to your pasted link),</li>
+    <li>Save QR files (PNG/SVG) into <code>downloads/</code>, and</li>
+    <li>
+      Let you download them instantly (those downloads appear on your Downloads
+      page).
+    </li>
+  </ul>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message }}</div>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data" class="mb-4">
+    <div class="mb-3">
+      <label class="form-label">Paste a link (URL)</label>
+      <input
+        name="link"
+        type="url"
+        class="form-control"
+        placeholder="https://example.com"
+      />
+      <div class="form-text">
+        Optional. If you also upload a file, the file takes precedence.
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Or upload a file</label>
+      <input name="file" type="file" class="form-control" />
+      <div class="form-text">
+        Any file is OK. We’ll store it in <code>uploads/</code> and make the QR
+        point to it.
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">QR filename base (optional)</label>
+      <input
+        name="qr_name"
+        type="text"
+        class="form-control"
+        placeholder="my-qr"
+      />
+      <div class="form-text">If blank, we’ll generate a timestamped name.</div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Generate QR Code</button>
+  </form>
+
+  {% if qr %}
+  <hr class="my-4" />
+
+  <h5 class="mb-3">Preview</h5>
+  <div class="row g-3 align-items-center">
+    <div class="col-auto">
+      <!-- ✅ tool param added -->
+      <img
+        src="{{ url_for('view_download', tool='qr_code', filename=qr.png_name) }}"
+        alt="QR preview"
+        class="img-thumbnail"
+        style="max-width: 220px"
+      />
+    </div>
+    <div class="col">
+      <p class="small text-muted mb-2">This QR encodes:</p>
+      <code class="d-block text-break">{{ qr.data }}</code>
+
+      <div class="mt-3">
+        <a
+          class="btn btn-outline-primary me-2"
+          href="{{ url_for('qr_download', token=qr.token, fmt='png') }}"
+        >
+          Download PNG
+        </a>
+        <a
+          class="btn btn-outline-secondary me-2"
+          href="{{ url_for('qr_download', token=qr.token, fmt='svg') }}"
+        >
+          Download SVG
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <h6 class="mb-2">Embed options</h6>
+    <p class="small text-muted">Copy/paste into your site or docs.</p>
+
+    <div class="mb-3">
+      <label class="form-label">HTML &lt;img&gt; (PNG)</label>
+      <div class="input-group">
+        <!-- ✅ tool param added -->
+        <input
+          id="embedImg"
+          type="text"
+          class="form-control"
+          value='<img src="{{ url_for("view_download", tool="qr_code", filename=qr.png_name, _external=True) }}" alt="QR code">'
+          readonly
+        />
+        <button
+          class="btn btn-outline-secondary"
+          type="button"
+          data-copy="#embedImg"
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">HTML &lt;object&gt; (SVG)</label>
+      <div class="input-group">
+        <!-- ✅ tool param added -->
+        <input
+          id="embedSvg"
+          type="text"
+          class="form-control"
+          value='<object type="image/svg+xml" data="{{ url_for("view_download", tool="qr_code", filename=qr.svg_name, _external=True) }}"></object>'
+          readonly
+        />
+        <button
+          class="btn btn-outline-secondary"
+          type="button"
+          data-copy="#embedSvg"
+        >
+          Copy
+        </button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  // Simple copy-to-clipboard
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-copy]");
+    if (!btn) return;
+    const sel = btn.getAttribute("data-copy");
+    const input = document.querySelector(sel);
+    if (!input) return;
+    input.select();
+    input.setSelectionRange(0, 99999);
+    document.execCommand("copy");
+    btn.textContent = "Copied!";
+    setTimeout(() => (btn.textContent = "Copy"), 1000);
+  });
+</script>
+{% endblock %}
