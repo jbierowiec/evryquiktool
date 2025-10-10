@@ -3,27 +3,8 @@
   <h3 class="mb-3">QR Code Generator</h3>
 
   <p class="text-muted">
-    Upload <em>anything</em> (image, file, etc.) or paste a link. When you click
-    <strong>Generate QR Code</strong>, we’ll:
-  </p>
-  <ul>
-    <li>
-      Save uploaded files into <code>uploads/</code> so they appear on your
-      Uploads page,
-    </li>
-    <li>Create a QR that points to that file (or to your pasted link),</li>
-    <li>Save QR files (PNG/SVG) into <code>downloads/</code>, and</li>
-    <li>
-      Let you download them instantly (those downloads appear on your Downloads
-      page).
-    </li>
+    Upload <strong>anything</strong> (image, file, etc.) or paste a link.
   </ul>
-
-  {% if error %}
-  <div class="alert alert-danger">{{ error }}</div>
-  {% endif %} {% if message %}
-  <div class="alert alert-success">{{ message }}</div>
-  {% endif %}
 
   <form method="post" enctype="multipart/form-data" class="mb-4">
     <div class="mb-3">
@@ -43,8 +24,7 @@
       <label class="form-label">Or upload a file</label>
       <input name="file" type="file" class="form-control" />
       <div class="form-text">
-        Any file is OK. We’ll store it in <code>uploads/</code> and make the QR
-        point to it.
+        Any file is OK. 
       </div>
     </div>
 
