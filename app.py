@@ -14,8 +14,9 @@ import subprocess
 import numpy as np
 import shutil as _shutil
 from pathlib import Path
-from datetime import datetime
 from yt_dlp import YoutubeDL
+from datetime import datetime
+from urllib.parse import urlparse, quote, unquote
 from yt_dlp.utils import DownloadError
 from typing import Optional, List, Tuple
 from shutil import which as sh_which
@@ -28,7 +29,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from PIL import Image, ImageOps, ImageFilter
 from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
-    send_from_directory, send_file, flash, Blueprint, current_app, abort,
+    send_from_directory, send_file, flash, Blueprint, current_app, abort
 )
 import qrcode
 from qrcode.image.svg import SvgImage
@@ -112,6 +113,7 @@ UPLOADS_BY_TOOL = {
     "image_to_puzzle": UPLOAD_DIR / "image_to_puzzle",  
     "zipper": UPLOAD_DIR / "zipper",  
     "qr_code": UPLOAD_DIR / "qr_code",  
+    "url_renamer": UPLOAD_DIR / "url_renamer",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -128,6 +130,7 @@ DOWNLOADS_BY_TOOL = {
     "image_to_puzzle": DOWNLOAD_DIR / "image_to_puzzle",  
     "zipper": DOWNLOAD_DIR / "zipper",  
     "qr_code": DOWNLOAD_DIR / "qr_code",  
+    "url_renamer": DOWNLOAD_DIR / "url_renamer",  
 }
 
 # Ensure folders exist
@@ -1766,15 +1769,14 @@ def zipper():
         max_age=0,
     )
 
-
+# -------------------------
+# QR Code Generator
+# -------------------------
 QR_UPLOAD_DIR: Path = UPLOADS_BY_TOOL["qr_code"]
 QR_DOWNLOAD_DIR: Path = DOWNLOADS_BY_TOOL["qr_code"]
 QR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 QR_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# -------------------------
-# Helpers
-# -------------------------
 _filename_cleanup = re.compile(r"[^A-Za-z0-9._-]+")
 
 def unique_name(base: str, ext: str) -> str:
@@ -1817,9 +1819,6 @@ def gen_qr_png_and_svg(data: str, base: str) -> tuple[str, str]:
 # In-memory map for quick download by token (no re-gen needed)
 _QR_CACHE: dict[str, dict] = {}
 
-# -------------------------
-# Routes
-# -------------------------
 @app.route("/qr_code", methods=["GET", "POST"])
 def qr_code():
     """
@@ -1903,6 +1902,72 @@ def qr_download(token: str, fmt: str):
     return send_from_directory(QR_DOWNLOAD_DIR, fname, as_attachment=True)
 
 
+# ---------------------------
+# URL Renamer
+# ---------------------------
+_slug_re = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-_]{0,62})$")
+
+def clean_slug(s: str) -> str:
+    return (s or "").strip().replace(" ", "_")
+
+def is_valid_slug(s: str) -> bool:
+    return bool(_slug_re.match(s))
+
+def normalize_url(u: str) -> str:
+    u = (u or "").strip()
+    if not u:
+        return u
+    parsed = urlparse(u)
+    if not parsed.scheme:
+        u = "https://" + u
+    return u
+
+def is_http_url(u: str) -> bool:
+    try:
+        p = urlparse(u)
+        return p.scheme in ("http", "https") and bool(p.netloc)
+    except Exception:
+        return False
+
+# ---------------------------
+# Routes
+# ---------------------------
+@app.route("/url_renamer", methods=["GET", "POST"])
+def url_renamer():
+    if request.method == "POST":
+        raw_url = request.form.get("target_url", "")
+        raw_slug = request.form.get("slug", "")
+
+        target_url = normalize_url(raw_url)
+        slug = clean_slug(raw_slug)
+
+        if not target_url:
+            flash("Please provide a destination URL.", "danger")
+            return render_template("url_renamer.html")
+
+        if not is_http_url(target_url):
+            flash("URL must be a valid http(s) URL.", "danger")
+            return render_template("url_renamer.html", target_url=raw_url, slug=raw_slug)
+
+        if not slug:
+            flash("Please provide a name (slug).", "danger")
+            return render_template("url_renamer.html", target_url=raw_url)
+
+        if not is_valid_slug(slug):
+            flash("Name can use letters, numbers, dashes, underscores (max 63).", "danger")
+            return render_template("url_renamer.html", target_url=raw_url, slug=raw_slug)
+
+        # Just show the slug (not a URL)
+        return render_template(
+            "url_renamer.html",
+            created=True,
+            renamed_link=slug,
+            target_url=target_url,
+        )
+
+    return render_template("url_renamer.html")
+
+
 # -------------------------
 # Uploads 
 # -------------------------
@@ -1922,6 +1987,7 @@ def uploads_index():
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
+        "url_renamer": len(list_files(UPLOADS_BY_TOOL["url_renamer"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -1945,6 +2011,7 @@ def uploads_tool(tool):
         "image_to_puzzle": len(list_files(UPLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
+        "url_renamer": len(list_files(UPLOADS_BY_TOOL["url_renamer"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -1998,6 +2065,7 @@ def downloads_index():
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
+        "url_renamer": len(list_files(DOWNLOADS_BY_TOOL["url_renamer"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -2021,6 +2089,7 @@ def downloads_tool(tool):
         "image_to_puzzle": len(list_files(DOWNLOADS_BY_TOOL["image_to_puzzle"])),
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
+        "url_renamer": len(list_files(DOWNLOADS_BY_TOOL["url_renamer"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 

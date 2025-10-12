@@ -1,0 +1,197 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4" style="max-width: 720px">
+  <h3 class="mb-3">URL Renamer</h3>
+  <p class="text-muted">
+    Paste a destination URL, choose a custom name, and copy your renamed label
+    as a
+    <strong>hyperlink</strong> for any file/application.
+  </p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %} {% if
+  messages %} {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
+    {{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %} {% endif %} {% endwith %}
+
+  <form method="POST" class="card card-body shadow-sm border-0 mb-3">
+    <div class="mb-3">
+      <label class="form-label">Destination URL</label>
+      <input
+        type="url"
+        required
+        name="target_url"
+        class="form-control"
+        placeholder="https://example.com"
+        value="{{ target_url or '' }}"
+      />
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Custom name</label>
+      <input
+        type="text"
+        required
+        name="slug"
+        class="form-control"
+        pattern="[A-Za-z0-9][A-Za-z0-9-_]{0,62}"
+        placeholder="my_link_name"
+        value="{{ slug or '' }}"
+      />
+      <div class="form-text">
+        letters, numbers, dashes, underscores (max 63)
+      </div>
+    </div>
+
+    <button class="btn btn-primary w-100" type="submit">Rename</button>
+  </form>
+
+  {% if created %}
+  <div class="card border-0 shadow-sm">
+    <div class="card-body">
+      <h6 class="mb-2">Your renamed label</h6>
+
+      <!-- Input group with ONLY the 'Copy hyperlink' button -->
+      <div class="input-group mb-2">
+        <input
+          id="renamedLabel"
+          class="form-control text-center"
+          readonly
+          value="{{ renamed_link }}"
+        />
+        <button
+          id="copyHyperlinkBtn"
+          class="btn btn-outline-secondary"
+          type="button"
+          data-label="{{ renamed_link }}"
+          data-url="{{ target_url }}"
+        >
+          Copy
+        </button>
+      </div>
+
+      <div class="small text-muted">
+        This represents:<br />
+        <code class="text-break">{{ target_url }}</code>
+      </div>
+
+      <details class="mt-3">
+        <summary class="small">Optional: copy as Markdown / HTML</summary>
+        <div class="mt-2">
+          <label class="form-label small mb-1">Markdown</label>
+          <div class="input-group mb-2">
+            <input
+              id="mdSnippet"
+              class="form-control"
+              readonly
+              value="[{{ renamed_link }}]({{ target_url }})"
+            />
+            <button
+              class="btn btn-outline-secondary"
+              type="button"
+              onclick="copyPlain('#mdSnippet', this)"
+            >
+              Copy
+            </button>
+          </div>
+
+          <label class="form-label small mb-1">HTML</label>
+          <div class="input-group">
+            <input
+              id="htmlSnippet"
+              class="form-control"
+              readonly
+              value='<a href="{{ target_url }}">{{ renamed_link }}</a>'
+            />
+            <button
+              class="btn btn-outline-secondary"
+              type="button"
+              onclick="copyPlain('#htmlSnippet', this)"
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  (function () {
+    // Copy a formatted hyperlink for Google Docs/Email.
+    // Writes BOTH text/html (<a href="...">label</a>) and text/plain ("label (url)").
+    const copyHyperlinkBtn = document.getElementById("copyHyperlinkBtn");
+    if (copyHyperlinkBtn) {
+      copyHyperlinkBtn.addEventListener("click", async () => {
+        const label = copyHyperlinkBtn.dataset.label || "";
+        const url = copyHyperlinkBtn.dataset.url || "";
+        const html = `<a href="${url}">${escapeHtml(label)}</a>`;
+        const plain = `${label} (${url})`;
+
+        try {
+          const item = new ClipboardItem({
+            "text/html": new Blob([html], { type: "text/html" }),
+            "text/plain": new Blob([plain], { type: "text/plain" }),
+          });
+          await navigator.clipboard.write([item]);
+          flashBtn(copyHyperlinkBtn, "Copied!");
+        } catch (err) {
+          // Fallback for older browsers
+          const div = document.createElement("div");
+          div.contentEditable = "true";
+          div.innerHTML = html;
+          document.body.appendChild(div);
+          const range = document.createRange();
+          range.selectNodeContents(div);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand("copy");
+          document.body.removeChild(div);
+          flashBtn(copyHyperlinkBtn, "Copied!");
+        }
+      });
+    }
+
+    // Helpers
+    window.copyPlain = async function (selector, btnEl) {
+      const el = document.querySelector(selector);
+      el.select();
+      try {
+        await navigator.clipboard.writeText(el.value);
+        flashBtn(btnEl, "Copied!");
+      } catch {
+        document.execCommand("copy");
+        flashBtn(btnEl, "Copied!");
+      }
+    };
+
+    function flashBtn(btn, text) {
+      const old = btn.textContent;
+      btn.textContent = text;
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = old;
+        btn.disabled = false;
+      }, 1200);
+    }
+
+    function escapeHtml(s) {
+      return s.replace(
+        /[&<>"']/g,
+        (m) =>
+          ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          }[m])
+      );
+    }
+  })();
+</script>
+{% endblock %}
