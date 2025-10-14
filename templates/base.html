@@ -257,6 +257,13 @@
               >URL Renamer</a
             >
           </li>
+          <li class="nav-item">
+            <a
+              class="nav-link {{ 'active' if request.path.startswith('/file_converter') else '' }}"
+              href="{{ url_for('file_converter') }}"
+              >File Format Converter</a
+            >
+          </li>
         </ul>
 
         <!-- Library (Uploads/Downloads/Go Back) preserved exactly -->
@@ -399,6 +406,13 @@
             class="nav-link {{ 'active' if request.path.startswith('/url_renamer') else '' }}"
             href="{{ url_for('url_renamer') }}"
             >URL Renamer</a
+          >
+        </li>
+        <li class="nav-item">
+          <a
+            class="nav-link {{ 'active' if request.path.startswith('/file_converter') else '' }}"
+            href="{{ url_for('file_converter') }}"
+            >File Format Converter</a
           >
         </li>
       </ul>

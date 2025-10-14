@@ -7,8 +7,9 @@
   "video_cropper" %} — Video Time Crop Editor {% elif tool == "audio_to_text" %}
   — Audio to Text Transcriber {% elif tool == "image_sketch" %} — Image to
   Sketch Converter {% elif tool == "qr_code" %} — QR Code Generator {% elif tool
-  == "url_renamer" %} — URL Renamer {% else %} — {{ tool|replace("_", " ")|title
-  }} {% endif %} {% endif %}
+  == "url_renamer" %} — URL Renamer {% elif tool == "file_converter" %} — File Format
+  Converter {% else %} — {{ tool|replace("_", " ")|title }} {% endif %} {% endif
+  %}
 </h3>
 
 {% if not tool %}
@@ -268,7 +269,7 @@
     </div>
   </div>
 
-    <div class="col">
+  <div class="col">
     <div class="card tool-card h-100">
       <div class="card-body d-flex flex-column">
         <h5 class="card-title">URL Renamer</h5>
@@ -282,6 +283,27 @@
           <a
             class="btn btn-primary btn-sm"
             href="{{ url_for('downloads_tool', tool='url_renamer') }}"
+            >Open</a
+          >
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card tool-card h-100">
+      <div class="card-body d-flex flex-column">
+        <h5 class="card-title">File Format Converter</h5>
+        <p class="text-muted mb-3">
+          Any file downloaded after converting from the original file format.
+        </p>
+        <div class="mt-auto d-flex align-items-center justify-content-between">
+          <span class="badge text-bg-secondary"
+            >{{ counts.file_converter }} files</span
+          >
+          <a
+            class="btn btn-primary btn-sm"
+            href="{{ url_for('downloads_tool', tool='file_converter') }}"
             >Open</a
           >
         </div>

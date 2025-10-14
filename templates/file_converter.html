@@ -1,0 +1,233 @@
+{% extends "base.html" %} {% block content %}
+<div class="container py-4">
+  <h3 class="mb-3">File Format Converter</h3>
+
+  <p class="text-muted">
+    Upload files and convert between formats. Supported:
+    <strong>PDF → images</strong>, <strong>images → PDF</strong>,
+    <strong>PDF → Word (DOCX)</strong>, and <strong>Word (DOCX) → PDF</strong>.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error|safe }}</div>
+  {% endif %} {% if message %}
+  <div class="alert alert-success">{{ message|safe }}</div>
+  {% endif %}
+
+  <form
+    id="convertForm"
+    method="post"
+    enctype="multipart/form-data"
+    action="{{ url_for('file_converter') }}"
+    class="mb-4"
+  >
+    <!-- Conversion type -->
+    <div class="mb-3">
+      <label for="convert_type" class="form-label">Conversion type</label>
+      <select
+        class="form-select"
+        id="convert_type"
+        name="convert_type"
+        required
+      >
+        <option value="" selected disabled>Choose…</option>
+        <option value="pdf_to_images">PDF → Images (PNG/JPG)</option>
+        <option value="images_to_pdf">Images (PNG/JPG) → PDF</option>
+        <option value="pdf_to_docx">PDF → Word (DOCX) (text-only)</option>
+        <option value="docx_to_pdf">Word (DOCX) → PDF</option>
+      </select>
+      <div class="form-text">
+        For <em>PDF → Images</em>, you’ll get a ZIP containing one image per
+        page.
+      </div>
+    </div>
+
+    <!-- PDF/Single-file picker -->
+    <div class="mb-3 d-none" data-for="single">
+      <label class="form-label">Select a file</label>
+      <input
+        class="form-control"
+        type="file"
+        id="file_single"
+        name="file_single"
+      />
+      <div class="form-text">
+        Accepts: .pdf, .docx (depending on conversion).
+      </div>
+    </div>
+
+    <!-- Multi-image picker -->
+    <div class="mb-3 d-none" data-for="multi">
+      <label class="form-label">Select images</label>
+      <input
+        class="form-control"
+        type="file"
+        id="files_multi"
+        name="files_multi"
+        accept="image/png,image/jpeg"
+        multiple
+      />
+      <div class="form-text">
+        Accepts: JPG/PNG. Order is preserved by filename.
+      </div>
+    </div>
+
+    <!-- Drag & drop zone -->
+    <div
+      id="dropZone"
+      class="border border-2 rounded p-4 text-center mb-3 bg-light-subtle d-none"
+      data-for="drop"
+    >
+      <i class="bi bi-cloud-arrow-up fs-1 d-block mb-2"></i>
+      <div class="fw-semibold">Drag & drop file(s) here</div>
+      <small class="text-muted"
+        >They will be added to the selection above.</small
+      >
+    </div>
+
+    <!-- Options for PDF -> Images -->
+    <div id="opts_pdf_to_images" class="row g-3 d-none">
+      <div class="col-md-4">
+        <label class="form-label">Image format</label>
+        <select class="form-select" name="img_format">
+          <option value="png" selected>PNG</option>
+          <option value="jpg">JPG</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">DPI</label>
+        <input
+          class="form-control"
+          type="number"
+          name="dpi"
+          value="144"
+          min="72"
+          max="600"
+        />
+        <div class="form-text">Higher DPI = larger images.</div>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Page range (optional)</label>
+        <input
+          class="form-control"
+          type="text"
+          name="page_range"
+          placeholder="e.g., 1-3,5"
+        />
+        <div class="form-text">Leave blank for all pages.</div>
+      </div>
+    </div>
+
+    <!-- Options for Images -> PDF -->
+    <div id="opts_images_to_pdf" class="row g-3 d-none">
+      <div class="col-md-6">
+        <label class="form-label">Fit mode</label>
+        <select class="form-select" name="fit_mode">
+          <option value="auto" selected>Auto (preserve image size)</option>
+          <option value="letter">US Letter (fit image)</option>
+          <option value="a4">A4 (fit image)</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">Orientation</label>
+        <select class="form-select" name="orientation">
+          <option value="auto" selected>Auto</option>
+          <option value="portrait">Portrait</option>
+          <option value="landscape">Landscape</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Output filename -->
+    <div class="mb-3">
+      <label class="form-label">Output name (optional)</label>
+      <input
+        class="form-control"
+        type="text"
+        name="output_name"
+        placeholder="my_converted_file"
+      />
+      <div class="form-text">
+        Don’t include an extension; we’ll add the right one.
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Convert</button>
+  </form>
+</div>
+
+<script>
+  (() => {
+    const typeSel = document.getElementById("convert_type");
+    const single = document.querySelector('[data-for="single"]');
+    const multi = document.querySelector('[data-for="multi"]');
+    const drop = document.querySelector('[data-for="drop"]');
+    const fileSingle = document.getElementById("file_single");
+    const filesMulti = document.getElementById("files_multi");
+
+    const optsPdfToImages = document.getElementById("opts_pdf_to_images");
+    const optsImagesToPdf = document.getElementById("opts_images_to_pdf");
+
+    function setMode(mode) {
+      // Hide all conditional blocks first
+      [single, multi, drop, optsPdfToImages, optsImagesToPdf].forEach((el) =>
+        el.classList.add("d-none")
+      );
+
+      if (
+        mode === "pdf_to_images" ||
+        mode === "pdf_to_docx" ||
+        mode === "docx_to_pdf"
+      ) {
+        single.classList.remove("d-none");
+        drop.classList.remove("d-none");
+      }
+      if (mode === "images_to_pdf") {
+        multi.classList.remove("d-none");
+        drop.classList.remove("d-none");
+      }
+      if (mode === "pdf_to_images") {
+        optsPdfToImages.classList.remove("d-none");
+      }
+      if (mode === "images_to_pdf") {
+        optsImagesToPdf.classList.remove("d-none");
+      }
+    }
+
+    typeSel.addEventListener("change", (e) => setMode(e.target.value));
+    setMode(typeSel.value || "");
+
+    // Drag & drop handling
+    ["dragenter", "dragover"].forEach((evt) =>
+      drop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.add("border-primary");
+      })
+    );
+    ["dragleave", "drop"].forEach((evt) =>
+      drop.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.remove("border-primary");
+      })
+    );
+    drop.addEventListener("drop", (e) => {
+      const dt = e.dataTransfer;
+      if (!(dt && dt.files && dt.files.length)) return;
+      const mode = typeSel.value;
+
+      if (mode === "images_to_pdf") {
+        // append to multi
+        const dataTransfer = new DataTransfer();
+        // combine existing + new
+        for (const f of filesMulti.files) dataTransfer.items.add(f);
+        for (const f of dt.files) dataTransfer.items.add(f);
+        filesMulti.files = dataTransfer.files;
+      } else {
+        fileSingle.files = dt.files;
+      }
+    });
+  })();
+</script>
+{% endblock %}

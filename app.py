@@ -6,19 +6,22 @@ import re
 import math
 import time
 import uuid
+import fitz
 import shlex
 import base64
 import pikepdf
+import img2pdf
 import zipfile
 import subprocess
 import numpy as np
 import shutil as _shutil
 from pathlib import Path
+from docx import Document
 from yt_dlp import YoutubeDL
 from datetime import datetime
 from urllib.parse import urlparse, quote, unquote
 from yt_dlp.utils import DownloadError
-from typing import Optional, List, Tuple
+from typing import Iterable, Optional, List, Tuple
 from shutil import which as sh_which
 from werkzeug.utils import secure_filename
 from reportlab.lib.pagesizes import letter
@@ -72,6 +75,11 @@ try:
 except Exception:
     _HAS_REMBG = False
 
+try:
+    from docx2pdf import convert as docx2pdf_convert  # may fail on Linux servers
+    HAS_DOCX2PDF = True
+except Exception:
+    HAS_DOCX2PDF = False
 
 # Make imageio-ffmpeg's bundled ffmpeg visible (works on Railway too)
 def has_ffmpeg() -> bool:
@@ -114,6 +122,7 @@ UPLOADS_BY_TOOL = {
     "zipper": UPLOAD_DIR / "zipper",  
     "qr_code": UPLOAD_DIR / "qr_code",  
     "url_renamer": UPLOAD_DIR / "url_renamer",  
+    "file_converter": UPLOAD_DIR / "file_converter",  
 }
 
 DOWNLOADS_BY_TOOL = {
@@ -131,6 +140,7 @@ DOWNLOADS_BY_TOOL = {
     "zipper": DOWNLOAD_DIR / "zipper",  
     "qr_code": DOWNLOAD_DIR / "qr_code",  
     "url_renamer": DOWNLOAD_DIR / "url_renamer",  
+    "file_converter": DOWNLOAD_DIR / "file_converter",  
 }
 
 # Ensure folders exist
@@ -219,7 +229,48 @@ def _s_to_hms(sec: int) -> str:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
-    
+def unique_name(base: str, ext: str) -> str:
+    """Make a unique filename like 'base-YYYYmmdd-HHMMSS-<shortuuid>.ext'."""
+    base = _filename_cleanup.sub("-", base).strip("-") or "file"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    uid = uuid.uuid4().hex[:8]
+    return f"{base}-{stamp}-{uid}.{ext.lstrip('.')}"
+
+def parse_page_range(rng: str, max_pages: int) -> List[int]:
+    """
+    "1-3,5" -> [1,2,3,5]; pages are 1-based in the UI, we’ll convert to 0-based later.
+    """
+    pages = set()
+    if not rng:
+        return list(range(1, max_pages + 1))
+    for part in rng.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-", 1)
+            try:
+                a, b = int(a), int(b)
+                for p in range(min(a, b), max(a, b) + 1):
+                    if 1 <= p <= max_pages:
+                        pages.add(p)
+            except ValueError:
+                continue
+        else:
+            try:
+                p = int(part)
+                if 1 <= p <= max_pages:
+                    pages.add(p)
+            except ValueError:
+                continue
+    return sorted(pages)
+
+def pil_force_rgb(img: Image.Image) -> Image.Image:
+    if img.mode in ("RGBA", "LA", "P"):
+        return img.convert("RGB")
+    if img.mode == "CMYK":
+        return img.convert("RGB")
+    return img
+
+
 # -------------------------
 # Landing 
 # -------------------------
@@ -229,7 +280,7 @@ def landing():
 
 
 # -------------------------
-# Landing 
+# Privacy Policy 
 # -------------------------
 @app.route("/privacy_policy")
 def privacy_policy():
@@ -1903,7 +1954,7 @@ def qr_download(token: str, fmt: str):
 
 
 # ---------------------------
-# URL Renamer
+# URL Renamer Helper Functions
 # ---------------------------
 _slug_re = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-_]{0,62})$")
 
@@ -1928,9 +1979,10 @@ def is_http_url(u: str) -> bool:
         return p.scheme in ("http", "https") and bool(p.netloc)
     except Exception:
         return False
-
+   
+    
 # ---------------------------
-# Routes
+# URL Renamer 
 # ---------------------------
 @app.route("/url_renamer", methods=["GET", "POST"])
 def url_renamer():
@@ -1968,6 +2020,208 @@ def url_renamer():
     return render_template("url_renamer.html")
 
 
+# ---------------------------
+# File Converter
+# ---------------------------
+@app.route("/file_converter", methods=["GET", "POST"])
+def file_converter():
+    if request.method == "GET":
+        return render_template("file_converter.html")
+
+    # POST: perform conversion
+    convert_type = request.form.get("convert_type", "")
+    output_name  = request.form.get("output_name", "").strip()
+
+    try:
+        if convert_type == "pdf_to_images":
+            f = request.files.get("file_single")
+            if not f or not f.filename.lower().endswith(".pdf"):
+                raise ValueError("Please upload a PDF file.")
+            return handle_pdf_to_images(f, output_name)
+
+        elif convert_type == "images_to_pdf":
+            files = request.files.getlist("files_multi")
+            if not files:
+                raise ValueError("Please upload at least one image (PNG/JPG).")
+            return handle_images_to_pdf(files, output_name)
+
+        elif convert_type == "pdf_to_docx":
+            f = request.files.get("file_single")
+            if not f or not f.filename.lower().endswith(".pdf"):
+                raise ValueError("Please upload a PDF file.")
+            return handle_pdf_to_docx(f, output_name)
+
+        elif convert_type == "docx_to_pdf":
+            f = request.files.get("file_single")
+            if not f or not f.filename.lower().endswith(".docx"):
+                raise ValueError("Please upload a DOCX file.")
+            return handle_docx_to_pdf(f, output_name)
+
+        else:
+            raise ValueError("Select a valid conversion type.")
+    except Exception as e:
+        # Show a nice message on the page if conversion failed
+        flash(str(e), "error")
+        return redirect(url_for("file_converter"))
+
+
+# ---------------------------
+# Conversion Handlers
+# ---------------------------
+def handle_pdf_to_images(file_storage, output_base: str):
+    img_format = (request.form.get("img_format") or "png").lower()
+    dpi = int(request.form.get("dpi") or 144)
+    page_range = (request.form.get("page_range") or "").strip()
+
+    # Save uploaded PDF
+    safe_pdf_name = unique_name(secure_filename(file_storage.filename), ".pdf")
+    pdf_path = UPLOAD_DIR / "file_converter" / safe_pdf_name
+    file_storage.save(pdf_path)
+
+    # Render pages
+    doc = fitz.open(pdf_path)
+    all_pages = parse_page_range(page_range, doc.page_count)
+    if not all_pages:
+        doc.close()
+        raise ValueError("No pages selected after parsing range.")
+
+    images: List[Tuple[str, bytes]] = []
+    for user_page in all_pages:
+        page_index = user_page - 1  # convert to 0-based
+        page = doc.load_page(page_index)
+        zoom = dpi / 72.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img_bytes = pix.tobytes("png") if img_format == "png" else pix.tobytes("jpg")
+        ext = "png" if img_format == "png" else "jpg"
+        images.append((f"page-{user_page:04d}.{ext}", img_bytes))
+    doc.close()
+
+    # Bundle into ZIP
+    out_zip_name = ensure_ext(output_base, "zip") if output_base else unique_name("pdf-pages", ".zip")
+    out_zip_path = DOWNLOAD_DIR / "file_converter" / out_zip_name
+    with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for fname, data in images:
+            zf.writestr(fname, data)
+
+    return send_file(out_zip_path, as_attachment=True, download_name=out_zip_name)
+
+def handle_images_to_pdf(files: Iterable, output_base: str):
+    # Save uploads & keep an ordered list (sort by filename for stability)
+    saved_paths: List[Path] = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        if not f.filename.lower().endswith((".png", ".jpg", ".jpeg")):
+            continue
+        safe_name = unique_name(secure_filename(f.filename), Path(f.filename).suffix)
+        path = UPLOAD_DIR / "file_converter" / safe_name
+        f.save(path)
+        saved_paths.append(path)
+
+    if not saved_paths:
+        raise ValueError("No valid images uploaded (need PNG/JPG).")
+
+    # Fit options
+    fit_mode = (request.form.get("fit_mode") or "auto").lower()  # auto, letter, a4
+    orientation = (request.form.get("orientation") or "auto").lower()  # auto, portrait, landscape
+
+    # Page sizes in points (1/72 inch)
+    PAGE_SIZES = {
+        "letter": (612, 792),  # 8.5 x 11 in
+        "a4": (595, 842),      # 210 x 297 mm
+    }
+
+    # Build PDF bytes using img2pdf for efficiency & quality
+    layout_fun = None
+    if fit_mode in PAGE_SIZES:
+        w, h = PAGE_SIZES[fit_mode]
+        if orientation == "landscape":
+            w, h = max(w, h), min(w, h)
+        elif orientation == "portrait":
+            w, h = min(w, h), max(w, h)
+        # img2pdf page size tuple is in points
+        layout_fun = img2pdf.get_layout_fun((w, h))
+
+    images_bytes = []
+    for p in sorted(saved_paths, key=lambda x: x.name):
+        # Ensure JPEG/PNG in RGB
+        with Image.open(p) as im:
+            im = pil_force_rgb(im)
+            bio = io.BytesIO()
+            # Keep original encoding if jpg/png; convert to JPEG for others (rare)
+            if p.suffix.lower() in (".jpg", ".jpeg"):
+                im.save(bio, format="JPEG", quality=92, optimize=True)
+            else:
+                im.save(bio, format="PNG", optimize=True)
+            images_bytes.append(bio.getvalue())
+
+    pdf_bytes = img2pdf.convert(
+        images_bytes,
+        layout_fun=layout_fun
+    )
+
+    out_pdf_name = ensure_ext(output_base, "pdf") if output_base else unique_name("images-to-pdf", ".pdf")
+    out_pdf_path = DOWNLOAD_DIR / "file_converter" / out_pdf_name
+    with open(out_pdf_path, "wb") as f:
+        f.write(pdf_bytes)
+
+    return send_file(out_pdf_path, as_attachment=True, download_name=out_pdf_name)
+
+def handle_pdf_to_docx(file_storage, output_base: str):
+    # Save PDF
+    safe_pdf_name = unique_name(secure_filename(file_storage.filename), ".pdf")
+    pdf_path = UPLOAD_DIR / "file_converter" / safe_pdf_name
+    file_storage.save(pdf_path)
+
+    # Extract text (page-by-page) and write a simple DOCX
+    docx = Document()
+    pdf = fitz.open(pdf_path)
+    for i, page in enumerate(pdf):
+        text = page.get_text("text")
+        # Avoid empty paragraphs spam
+        for line in (text or "").splitlines():
+            docx.add_paragraph(line.rstrip("\n"))
+        if i < pdf.page_count - 1:
+            docx.add_page_break()
+    pdf.close()
+
+    out_docx_name = ensure_ext(output_base, "docx") if output_base else unique_name("pdf-to-docx", ".docx")
+    out_docx_path = DOWNLOAD_DIR / "file_converter" / out_docx_name
+    docx.save(out_docx_path)
+
+    return send_file(out_docx_path, as_attachment=True, download_name=out_docx_name)
+
+def handle_docx_to_pdf(file_storage, output_base: str):
+    if not HAS_DOCX2PDF:
+        raise RuntimeError(
+            "DOCX → PDF requires Microsoft Word (Windows/Mac) or a compatible backend. "
+            "This server doesn't have it. Try running locally on macOS/Windows with Word installed."
+        )
+
+    # Save DOCX
+    safe_docx_name = unique_name(secure_filename(file_storage.filename), ".docx")
+    docx_path = UPLOAD_DIR / "file_converter" / safe_docx_name
+    file_storage.save(docx_path)
+
+    out_pdf_name = ensure_ext(output_base, "pdf") if output_base else unique_name("docx-to-pdf", ".pdf")
+    out_pdf_path = DOWNLOAD_DIR / "file_converter" / out_pdf_name
+
+    # docx2pdf writes to a directory or file path (on Mac/Win it uses Word automation)
+    # We convert to a temp folder then rename if needed.
+    # If output path exists, remove to avoid errors.
+    if out_pdf_path.exists():
+        out_pdf_path.unlink()
+
+    # Convert; on some systems docx2pdf can write directly to out path
+    docx2pdf_convert(input_path=str(docx_path), output_path=str(out_pdf_path))
+
+    if not out_pdf_path.exists():
+        raise RuntimeError("Conversion failed. Ensure Microsoft Word is installed and accessible.")
+
+    return send_file(out_pdf_path, as_attachment=True, download_name=out_pdf_name)
+
+
 # -------------------------
 # Uploads 
 # -------------------------
@@ -1988,6 +2242,7 @@ def uploads_index():
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
         "url_renamer": len(list_files(UPLOADS_BY_TOOL["url_renamer"])),
+        "file_converter": len(list_files(UPLOADS_BY_TOOL["file_converter"])),
     }
     return render_template("uploads.html", tool=None, counts=counts, files=[])
 
@@ -2012,6 +2267,7 @@ def uploads_tool(tool):
         "zipper": len(list_files(UPLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(UPLOADS_BY_TOOL["qr_code"])),
         "url_renamer": len(list_files(UPLOADS_BY_TOOL["url_renamer"])),
+        "file_converter": len(list_files(UPLOADS_BY_TOOL["file_converter"])),
     }
     return render_template("uploads.html", tool=tool, counts=counts, files=files)
 
@@ -2066,6 +2322,7 @@ def downloads_index():
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
         "url_renamer": len(list_files(DOWNLOADS_BY_TOOL["url_renamer"])),
+        "file_converter": len(list_files(DOWNLOADS_BY_TOOL["file_converter"])),
     }
     return render_template("downloads.html", tool=None, counts=counts, files=[])
 
@@ -2090,6 +2347,7 @@ def downloads_tool(tool):
         "zipper": len(list_files(DOWNLOADS_BY_TOOL["zipper"])),
         "qr_code": len(list_files(DOWNLOADS_BY_TOOL["qr_code"])),
         "url_renamer": len(list_files(DOWNLOADS_BY_TOOL["url_renamer"])),
+        "file_converter": len(list_files(DOWNLOADS_BY_TOOL["file_converter"])),
     }
     return render_template("downloads.html", tool=tool, counts=counts, files=files)
 
