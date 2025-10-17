@@ -119,8 +119,25 @@
       <div class="container py-5">
         <h2 class="section-title mb-4">Tools</h2>
 
+        <!-- Search bar -->
+        <div class="row justify-content-center mb-4">
+          <div class="col-12 col-md-8 col-lg-6">
+            <input
+              id="toolSearch"
+              type="search"
+              class="form-control form-control-lg"
+              placeholder="Search tools (e.g., PDF, image, video)…"
+              aria-label="Search tools"
+            />
+            <div id="searchMeta" class="form-text mt-2"></div>
+          </div>
+        </div>
+
         <!-- 3 on lg+, 2 on md (iPad), 1 on sm/phone -->
-        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+        <div
+          id="toolsGrid"
+          class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4"
+        >
           <div class="col">
             <div class="card tool-card h-100">
               <div class="card-body">
@@ -433,6 +450,12 @@
               </div>
             </div>
           </div>
+
+          <div id="noResults" class="col d-none">
+            <div class="alert alert-light border text-center w-100">
+              No tools match your search.
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -515,6 +538,48 @@
     <script>
       document.getElementById("year").textContent = new Date().getFullYear();
     </script>
+
+    <script>
+      (function () {
+        const input = document.getElementById("toolSearch");
+        const grid = document.getElementById("toolsGrid");
+        if (!input || !grid) return;
+
+        const cols = Array.from(grid.querySelectorAll(".col")); // each card column
+        const meta = document.getElementById("searchMeta");
+        const none = document.getElementById("noResults");
+
+        function filter() {
+          const q = input.value.trim().toLowerCase();
+          const tokens = q.split(/\s+/).filter(Boolean);
+
+          let shown = 0;
+          cols.forEach((col) => {
+            // Skip the "no results" placeholder if present
+            if (col.id === "noResults") return;
+
+            const text = col.textContent.toLowerCase();
+            const match = tokens.every((t) => text.includes(t));
+
+            const visible = tokens.length === 0 || match;
+            col.style.display = visible ? "" : "none";
+            if (visible) shown++;
+          });
+
+          if (meta) {
+            meta.textContent = tokens.length
+              ? `${shown} result${shown === 1 ? "" : "s"}`
+              : "";
+          }
+          if (none) {
+            none.classList.toggle("d-none", shown !== 0);
+          }
+        }
+
+        input.addEventListener("input", filter);
+      })();
+    </script>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   </body>
 </html>
