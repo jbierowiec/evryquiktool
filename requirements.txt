@@ -18,4 +18,5 @@ pymupdf
 img2pdf
 python-docx
 docx2pdf
-python-dotenv
+python-dotenv>=1.0
+requests>=2.32

@@ -8,6 +8,7 @@ import math
 import time
 import uuid
 import fitz
+import json
 import shlex
 import base64
 import pikepdf
@@ -59,6 +60,12 @@ if _b64 and not COOKIE_PATH.exists():
         print(f"[yt] failed to write cookiefile: {e}")
 
 # Optional dependencies 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 try:
     import yt_dlp  
 except Exception:
@@ -294,64 +301,83 @@ executor = ThreadPoolExecutor(max_workers=MAIL_WORKERS)
 
 # ----- SMTP config (set in Railway Variables) -----
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))  # 587=STARTTLS, 465=SSL
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
-EMAIL_TO = os.environ.get("EMAIL_TO")
-SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))  # seconds
+EMAIL_TO   = os.environ.get("EMAIL_TO")
+SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))
 
 def is_valid_email(addr: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
 
-def build_email(user_email: str, missing_tool: str, broken_tool: str) -> EmailMessage:
-    subject = "New evryquiktool Contact Form Submission"
+def boot_log():
+    redacted_user = (SMTP_USERNAME or "")[:2] + "***" if SMTP_USERNAME else None
+    print("[EMAIL-CONFIG] ",
+          json.dumps({
+              "SMTP_HOST": SMTP_HOST,
+              "SMTP_PORT": SMTP_PORT,
+              "SMTP_USERNAME": redacted_user,
+              "EMAIL_FROM": EMAIL_FROM,
+              "EMAIL_TO": EMAIL_TO,
+              "SMTP_TIMEOUT": SMTP_TIMEOUT,
+          }, ensure_ascii=False))
+
+boot_log()
+
+def build_email(user_email: str, missing_tool: str, broken_tool: str) -> tuple[str, str]:
+    """Return (subject, text_body, html_body)"""
+    subject = "📩 New evryquiktool Contact Form Submission"
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    text_body = (
+        f"New evryquiktool Contact Form Submission\n\n"
+        f"Submitted: {ts}\n"
+        f"From: {user_email}\n\n"
+        f"Missing tool request:\n{missing_tool or '—'}\n\n"
+        f"Issue report:\n{broken_tool or '—'}\n"
+    )
 
     html_body = f"""
     <html>
       <body style="font-family:Arial,Helvetica,sans-serif; line-height:1.6; color:#222;">
-        <table style="border-collapse:collapse; width:100%; max-width:600px;">
+        <h2 style="color:#2c3e50;margin:0 0 12px;">New Contact Form Message</h2>
+        <div style="font-size:12px;color:#777;margin-bottom:12px;">Submitted: {ts}</div>
+        <table style="border-collapse:collapse; width:100%; max-width:640px;">
           <tr>
-            <td style="padding:8px; font-weight:bold; width:180px;">From:</td>
-            <td style="padding:8px;">{user_email}</td>
-          </tr>
-          <tr style="background-color:#f9f9f9;">
-            <td style="padding:8px; font-weight:bold;">Missing Tool Request:</td>
-            <td style="padding:8px;">{missing_tool or '—'}</td>
+            <td style="padding:8px; font-weight:600; width:180px; background:#fafafa;">From</td>
+            <td style="padding:8px;"><a href="mailto:{user_email}">{user_email}</a></td>
           </tr>
           <tr>
-            <td style="padding:8px; font-weight:bold;">Issue Report:</td>
-            <td style="padding:8px;">{broken_tool or '—'}</td>
+            <td style="padding:8px; font-weight:600; background:#fafafa;">Missing Tool Request</td>
+            <td style="padding:8px;">{(missing_tool or '—').replace('\n','<br/>')}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px; font-weight:600; background:#fafafa;">Issue Report</td>
+            <td style="padding:8px;">{(broken_tool or '—').replace('\n','<br/>')}</td>
           </tr>
         </table>
-        <p style="margin-top:24px; font-size:13px; color:#555;">
-          <em>Sent via the <strong>evryquiktool</strong> contact form.</em><br/>
-          Reply to <a href="mailto:{user_email}">{user_email}</a>.
+        <p style="margin-top:18px; font-size:13px; color:#555;">
+          <em>Sent via the <strong>evryquiktool</strong> contact form.</em>
         </p>
       </body>
     </html>
     """
+    return subject, text_body, html_body
 
-    text_body = (
-        "New evryquiktool Contact Form Submission\n\n"
-        f"From: {user_email}\n\n"
-        "Missing tool request:\n"
-        f"{missing_tool or '—'}\n\n"
-        "Issue report:\n"
-        f"{broken_tool or '—'}\n"
-    )
-
+def send_via_smtp(subject: str, text_body: str, html_body: str, reply_to: str) -> None:
+    """Raise on failure."""
+    if not all([SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
+        raise RuntimeError("SMTP env not fully set")
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
-    msg["Reply-To"] = user_email
+    msg["Reply-To"] = reply_to
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
-    return msg
 
-def send_email_now(msg: EmailMessage):
-    # Use SSL on 465; else STARTTLS on 587/other
+    print("[SMTP] connecting…")
     if SMTP_PORT == 465:
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context) as s:
@@ -364,6 +390,27 @@ def send_email_now(msg: EmailMessage):
             s.ehlo()
             s.login(SMTP_USERNAME, SMTP_PASSWORD)
             s.send_message(msg)
+    print("[SMTP] delivered ✔")
+
+def send_via_resend(subject: str, text_body: str, html_body: str, reply_to: str) -> None:
+    """Raise on failure. Requires RESEND_API_KEY and requests in requirements."""
+    import requests
+    print("[RESEND] sending…")
+    r = requests.post(
+        "https://api.resend.com/emails",
+        json={
+            "from": EMAIL_FROM,
+            "to": [EMAIL_TO],
+            "subject": subject,
+            "html": html_body,
+            "text": text_body,
+            "reply_to": reply_to,
+        },
+        timeout=10,
+    )
+    if r.status_code >= 300:
+        raise RuntimeError(f"Resend API error {r.status_code}: {r.text}")
+    print("[RESEND] accepted ✔")
 
 def back_to_contact(ok: bool):
     return redirect(f"/?sent={'1' if ok else '0'}#contact")
@@ -374,8 +421,8 @@ def back_to_contact(ok: bool):
 # -------------------------
 @app.post("/contact")
 def contact():
-    # Honeypot: block obvious bots
-    if request.form.get("company"):  # hidden field in your form
+    # Spam honeypot
+    if request.form.get("company"):
         return back_to_contact(True)
 
     user_email = (request.form.get("email") or "").strip()
@@ -383,21 +430,24 @@ def contact():
     broken_tool = (request.form.get("broken_tool") or "").strip()
 
     if not (user_email and is_valid_email(user_email) and (missing_tool or broken_tool)):
+        print("[CONTACT] validation failed")
         return back_to_contact(False)
 
+    subject, text_body, html_body = build_email(user_email, missing_tool, broken_tool)
+
+    # Try SMTP first, then Resend fallback if configured
     try:
-        msg = build_email(user_email, missing_tool, broken_tool)
-        # Queue the send so response returns immediately
-        executor.submit(send_email_now, msg)
+        send_via_smtp(subject, text_body, html_body, user_email)
         return back_to_contact(True)
     except Exception as e:
-        print("[ERROR] Failed to queue email:", e)
-        return back_to_contact(False)
+        print(f"[SMTP] failed: {e}")
+
+    # Both providers failed
+    return back_to_contact(False)
 
 @app.get("/healthz")
 def healthz():
     return "ok", 200
-
 
 # -------------------------
 # Privacy Policy 
