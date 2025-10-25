@@ -26,6 +26,7 @@ from datetime import datetime
 from urllib.parse import urlparse, quote, unquote
 from yt_dlp.utils import DownloadError
 from email.message import EmailMessage
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Optional, List, Tuple
 from shutil import which as sh_which
 from werkzeug.utils import secure_filename
@@ -288,39 +289,22 @@ def landing():
 # -----------------------------
 # Email / SMTP configuration
 # -----------------------------
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")   # e.g., smtp.gmail.com
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))         # 587 for STARTTLS, 465 for SSL
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")             # your SMTP username / full email
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")             # your SMTP password / app password
-EMAIL_TO      = os.environ.get("EMAIL_TO")                  # where you want to receive messages
-EMAIL_FROM    = os.environ.get("EMAIL_FROM", SMTP_USERNAME) # envelope From
+MAIL_WORKERS = int(os.environ.get("MAIL_WORKERS", "2"))
+executor = ThreadPoolExecutor(max_workers=MAIL_WORKERS)
 
-# Basic sanity checks on startup (optional but helpful)
-if not all([SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_TO, EMAIL_FROM]):
-    print("[WARN] SMTP/Email environment variables are not fully set. /contact will fail until configured.")
+# ----- SMTP config (set in Railway Variables) -----
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))  # 587=STARTTLS, 465=SSL
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
+EMAIL_TO = os.environ.get("EMAIL_TO")
+SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))  # seconds
 
 def is_valid_email(addr: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
 
-
-# -------------------------
-# Contact Form
-# -------------------------
-@app.post("/contact")
-def contact():
-    # Honeypot (spam trap)
-    if request.form.get("company"):
-        # Pretend to succeed to not tip off bots
-        return redirect("/?sent=1#contact")
-
-    user_email = (request.form.get("email") or "").strip()
-    missing_tool = (request.form.get("missing_tool") or "").strip()
-    broken_tool = (request.form.get("broken_tool") or "").strip()
-
-    if not (user_email and is_valid_email(user_email) and (missing_tool or broken_tool)):
-        return redirect("/?sent=0#contact")
-
-    # Build email
+def build_email(user_email: str, missing_tool: str, broken_tool: str) -> EmailMessage:
     subject = "New evryquiktool Contact Form Submission"
 
     html_body = f"""
@@ -340,56 +324,79 @@ def contact():
             <td style="padding:8px;">{broken_tool or '—'}</td>
           </tr>
         </table>
-
         <p style="margin-top:24px; font-size:13px; color:#555;">
-          <em>This message was sent via the <strong>evryquiktool</strong> contact form.</em><br/>
-          You can reply directly to <a href="mailto:{user_email}">{user_email}</a>.
+          <em>Sent via the <strong>evryquiktool</strong> contact form.</em><br/>
+          Reply to <a href="mailto:{user_email}">{user_email}</a>.
         </p>
       </body>
     </html>
     """
 
-    text_body = f"""
-    New evryquiktool Contact Form Submission
+    text_body = (
+        "New evryquiktool Contact Form Submission\n\n"
+        f"From: {user_email}\n\n"
+        "Missing tool request:\n"
+        f"{missing_tool or '—'}\n\n"
+        "Issue report:\n"
+        f"{broken_tool or '—'}\n"
+    )
 
-    From: {user_email}
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = EMAIL_TO
+    msg["Reply-To"] = user_email
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+    return msg
 
-    Missing tool request:
-    {missing_tool or '—'}
+def send_email_now(msg: EmailMessage):
+    # Use SSL on 465; else STARTTLS on 587/other
+    if SMTP_PORT == 465:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context) as s:
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as s:
+            s.ehlo()
+            s.starttls(context=ssl.create_default_context())
+            s.ehlo()
+            s.login(SMTP_USERNAME, SMTP_PASSWORD)
+            s.send_message(msg)
 
-    Issue report:
-    {broken_tool or '—'}
-    """
+def back_to_contact(ok: bool):
+    return redirect(f"/?sent={'1' if ok else '0'}#contact")
+
+
+# -------------------------
+# Contact Form
+# -------------------------
+@app.post("/contact")
+def contact():
+    # Honeypot: block obvious bots
+    if request.form.get("company"):  # hidden field in your form
+        return back_to_contact(True)
+
+    user_email = (request.form.get("email") or "").strip()
+    missing_tool = (request.form.get("missing_tool") or "").strip()
+    broken_tool = (request.form.get("broken_tool") or "").strip()
+
+    if not (user_email and is_valid_email(user_email) and (missing_tool or broken_tool)):
+        return back_to_contact(False)
 
     try:
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = EMAIL_TO
-        msg["Reply-To"] = user_email
-        msg.set_content(text_body)
-        msg.add_alternative(html_body, subtype="html")
-
-        # Send via STARTTLS (port 587). If you use port 465, switch to SMTP_SSL.
-        if SMTP_PORT == 465:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
-                server.login(SMTP_USERNAME, SMTP_PASSWORD)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-                server.ehlo()
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
-                server.login(SMTP_USERNAME, SMTP_PASSWORD)
-                server.send_message(msg)
-
-        return redirect("/?sent=1#contact")
-
+        msg = build_email(user_email, missing_tool, broken_tool)
+        # Queue the send so response returns immediately
+        executor.submit(send_email_now, msg)
+        return back_to_contact(True)
     except Exception as e:
-        # Log the error server-side if you want:
-        print(f"[ERROR] contact email failed: {e}")
-        return redirect("/?sent=0#contact")
+        print("[ERROR] Failed to queue email:", e)
+        return back_to_contact(False)
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
 
 
 # -------------------------

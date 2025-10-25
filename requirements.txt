@@ -18,3 +18,4 @@ pymupdf
 img2pdf
 python-docx
 docx2pdf
+python-dotenv
