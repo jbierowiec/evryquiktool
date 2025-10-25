@@ -468,7 +468,21 @@
         <!-- Centered form: constrained on desktop, full-width on tablet/phone -->
         <div class="row justify-content-center">
           <div class="col-12 col-md-10 col-lg-8 col-xl-6">
-            <form class="row g-3" method="post" action="#">
+            <form
+              class="row g-3"
+              method="post"
+              action="{{ url_for('contact') }}"
+              novalidate
+            >
+              <!-- Honeypot: should stay empty -->
+              <input
+                type="text"
+                name="company"
+                class="d-none"
+                tabindex="-1"
+                autocomplete="off"
+              />
+
               <div class="col-12">
                 <label class="form-label">Want a tool you don't see?</label>
                 <input
@@ -476,8 +490,10 @@
                   class="form-control"
                   name="missing_tool"
                   placeholder="Describe the tool you'd like"
+                  required
                 />
               </div>
+
               <div class="col-12">
                 <label class="form-label"
                   >Is a tool broken? Reach out to us here.</label
@@ -486,22 +502,29 @@
                   class="form-control"
                   name="broken_tool"
                   rows="4"
-                  placeholder="Tell us what went wrong"
+                  placeholder="Tell us what went wrong (or say N/A)"
+                  required
                 ></textarea>
               </div>
+
               <div class="col-12 col-md-6">
-                <label class="form-label">Your email (optional)</label>
+                <label class="form-label">Your email</label>
                 <input
                   type="email"
                   class="form-control"
                   name="email"
                   placeholder="you@example.com"
+                  required
                 />
               </div>
+
               <div class="col-12">
-                <button class="btn btn-primary" type="submit" disabled>
-                  Send (wire later)
-                </button>
+                <button class="btn btn-primary" type="submit">Send</button>
+              </div>
+
+              <!-- Inline alert area (filled by JS based on query params) -->
+              <div class="col-12">
+                <div id="contactAlert" class="alert d-none" role="alert"></div>
               </div>
             </form>
           </div>
@@ -577,6 +600,44 @@
         }
 
         input.addEventListener("input", filter);
+      })();
+    </script>
+
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const alertBox = document.getElementById("contactAlert");
+        if (!alertBox) return;
+
+        if (params.get("sent") === "1") {
+          alertBox.className = "alert alert-success";
+          alertBox.textContent = "Thanks! Your message was sent successfully.";
+        } else if (params.get("sent") === "0") {
+          alertBox.className = "alert alert-danger";
+          alertBox.textContent =
+            "Sorry—something went wrong sending your message.";
+        } else {
+          return;
+        }
+
+        alertBox.classList.remove("d-none");
+
+        // Hide after 2 seconds (2000 ms)
+        setTimeout(() => {
+          alertBox.classList.add("fade");
+          alertBox.style.transition = "opacity 0.5s ease";
+          alertBox.style.opacity = "0";
+          setTimeout(() => {
+            alertBox.classList.add("d-none");
+          }, 500); // wait for fade-out animation
+        }, 2000);
+
+        // Clean the URL so the alert doesn't persist on refresh.
+        window.history.replaceState(
+          {},
+          "",
+          window.location.pathname + "#contact"
+        );
       })();
     </script>
 

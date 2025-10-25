@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import ssl
 import math
 import time
 import uuid
@@ -11,16 +12,20 @@ import shlex
 import base64
 import pikepdf
 import img2pdf
+import smtplib
 import zipfile
 import subprocess
 import numpy as np
 import shutil as _shutil
+import qrcode
+from qrcode.image.svg import SvgImage
 from pathlib import Path
 from docx import Document
 from yt_dlp import YoutubeDL
 from datetime import datetime
 from urllib.parse import urlparse, quote, unquote
 from yt_dlp.utils import DownloadError
+from email.message import EmailMessage
 from typing import Iterable, Optional, List, Tuple
 from shutil import which as sh_which
 from werkzeug.utils import secure_filename
@@ -34,8 +39,9 @@ from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, abort
 )
-import qrcode
-from qrcode.image.svg import SvgImage
+
+from dotenv import load_dotenv
+load_dotenv()
 
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
 
@@ -277,6 +283,113 @@ def pil_force_rgb(img: Image.Image) -> Image.Image:
 @app.route("/")
 def landing():
     return render_template("landing.html")
+
+
+# -----------------------------
+# Email / SMTP configuration
+# -----------------------------
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")   # e.g., smtp.gmail.com
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))         # 587 for STARTTLS, 465 for SSL
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME")             # your SMTP username / full email
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")             # your SMTP password / app password
+EMAIL_TO      = os.environ.get("EMAIL_TO")                  # where you want to receive messages
+EMAIL_FROM    = os.environ.get("EMAIL_FROM", SMTP_USERNAME) # envelope From
+
+# Basic sanity checks on startup (optional but helpful)
+if not all([SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_TO, EMAIL_FROM]):
+    print("[WARN] SMTP/Email environment variables are not fully set. /contact will fail until configured.")
+
+def is_valid_email(addr: str) -> bool:
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
+
+
+# -------------------------
+# Contact Form
+# -------------------------
+@app.post("/contact")
+def contact():
+    # Honeypot (spam trap)
+    if request.form.get("company"):
+        # Pretend to succeed to not tip off bots
+        return redirect("/?sent=1#contact")
+
+    user_email = (request.form.get("email") or "").strip()
+    missing_tool = (request.form.get("missing_tool") or "").strip()
+    broken_tool = (request.form.get("broken_tool") or "").strip()
+
+    if not (user_email and is_valid_email(user_email) and (missing_tool or broken_tool)):
+        return redirect("/?sent=0#contact")
+
+    # Build email
+    subject = "New evryquiktool Contact Form Submission"
+
+    html_body = f"""
+    <html>
+      <body style="font-family:Arial,Helvetica,sans-serif; line-height:1.6; color:#222;">
+        <table style="border-collapse:collapse; width:100%; max-width:600px;">
+          <tr>
+            <td style="padding:8px; font-weight:bold; width:180px;">From:</td>
+            <td style="padding:8px;">{user_email}</td>
+          </tr>
+          <tr style="background-color:#f9f9f9;">
+            <td style="padding:8px; font-weight:bold;">Missing Tool Request:</td>
+            <td style="padding:8px;">{missing_tool or '—'}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px; font-weight:bold;">Issue Report:</td>
+            <td style="padding:8px;">{broken_tool or '—'}</td>
+          </tr>
+        </table>
+
+        <p style="margin-top:24px; font-size:13px; color:#555;">
+          <em>This message was sent via the <strong>evryquiktool</strong> contact form.</em><br/>
+          You can reply directly to <a href="mailto:{user_email}">{user_email}</a>.
+        </p>
+      </body>
+    </html>
+    """
+
+    text_body = f"""
+    New evryquiktool Contact Form Submission
+
+    From: {user_email}
+
+    Missing tool request:
+    {missing_tool or '—'}
+
+    Issue report:
+    {broken_tool or '—'}
+    """
+
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = EMAIL_TO
+        msg["Reply-To"] = user_email
+        msg.set_content(text_body)
+        msg.add_alternative(html_body, subtype="html")
+
+        # Send via STARTTLS (port 587). If you use port 465, switch to SMTP_SSL.
+        if SMTP_PORT == 465:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+                server.ehlo()
+                server.starttls(context=ssl.create_default_context())
+                server.ehlo()
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+
+        return redirect("/?sent=1#contact")
+
+    except Exception as e:
+        # Log the error server-side if you want:
+        print(f"[ERROR] contact email failed: {e}")
+        return redirect("/?sent=0#contact")
 
 
 # -------------------------
