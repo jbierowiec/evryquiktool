@@ -15,6 +15,7 @@ import pikepdf
 import img2pdf
 import smtplib
 import zipfile
+import requests
 import subprocess
 import numpy as np
 import shutil as _shutil
@@ -307,6 +308,7 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
 EMAIL_TO   = os.environ.get("EMAIL_TO")
 SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 
 def is_valid_email(addr: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
@@ -402,13 +404,14 @@ def send_via_smtp(subject: str, text_body: str, html_body: str, reply_to: str) -
     print("[SMTP] delivered ✔")
 
 def send_via_resend(subject: str, text_body: str, html_body: str, reply_to: str) -> None:
-    """Raise on failure. Requires RESEND_API_KEY and requests in requirements."""
-    import requests
+    if not all([RESEND_API_KEY, EMAIL_FROM, EMAIL_TO]):
+        raise RuntimeError("Resend vars not set: RESEND_API_KEY, EMAIL_FROM, EMAIL_TO")
     print("[RESEND] sending…")
     r = requests.post(
         "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
         json={
-            "from": EMAIL_FROM,
+            "from": EMAIL_FROM,          # must be a verified sender/domain in Resend
             "to": [EMAIL_TO],
             "subject": subject,
             "html": html_body,
@@ -418,45 +421,38 @@ def send_via_resend(subject: str, text_body: str, html_body: str, reply_to: str)
         timeout=10,
     )
     if r.status_code >= 300:
-        raise RuntimeError(f"Resend API error {r.status_code}: {r.text}")
+        raise RuntimeError(f"Resend error {r.status_code}: {r.text}")
     print("[RESEND] accepted ✔")
-
-def back_to_contact(ok: bool):
-    return redirect(f"/?sent={'1' if ok else '0'}#contact")
 
 
 # -------------------------
 # Contact Form
 # -------------------------
+def back_to_contact(ok: bool):
+    return redirect(f"/?sent={'1' if ok else '0'}#contact")
+
 @app.post("/contact")
 def contact():
-    # Spam honeypot
-    if request.form.get("company"):
+    if request.form.get("company"):  # honeypot
         return back_to_contact(True)
 
     user_email = (request.form.get("email") or "").strip()
     missing_tool = (request.form.get("missing_tool") or "").strip()
-    broken_tool = (request.form.get("broken_tool") or "").strip()
+    broken_tool  = (request.form.get("broken_tool") or "").strip()
 
-    if not (user_email and is_valid_email(user_email) and (missing_tool or broken_tool)):
+    if not (user_email and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user_email) and (missing_tool or broken_tool)):
         print("[CONTACT] validation failed")
         return back_to_contact(False)
 
     subject, text_body, html_body = build_email(user_email, missing_tool, broken_tool)
 
-    # Try SMTP first, then Resend fallback if configured
     try:
-        send_via_smtp(subject, text_body, html_body, user_email)
+        send_via_resend(subject, text_body, html_body, user_email)
         return back_to_contact(True)
     except Exception as e:
-        print(f"[SMTP] failed: {e}")
+        print(f"[RESEND] failed: {e}")
+        return back_to_contact(False)
 
-    # Both providers failed
-    return back_to_contact(False)
-
-@app.get("/healthz")
-def healthz():
-    return "ok", 200
 
 # -------------------------
 # Privacy Policy 
