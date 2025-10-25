@@ -325,23 +325,32 @@ def boot_log():
 
 boot_log()
 
-def build_email(user_email: str, missing_tool: str, broken_tool: str) -> tuple[str, str]:
-    """Return (subject, text_body, html_body)"""
-    subject = "📩 New evryquiktool Contact Form Submission"
+def build_email(user_email: str, missing_tool: str, broken_tool: str) -> tuple[str, str, str]:
+    """Return (subject, text_body, html_body)."""
+    from datetime import datetime
+
+    subject = "New evryquiktool Contact Form Submission"
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
+    # Precompute sanitized values (avoid backslashes inside f-string expressions)
+    missing_tool_disp = (missing_tool or "—")
+    broken_tool_disp  = (broken_tool or "—")
+    missing_tool_html = missing_tool_disp.replace("\n", "<br/>")
+    broken_tool_html  = broken_tool_disp.replace("\n", "<br/>")
+
     text_body = (
-        f"New evryquiktool Contact Form Submission\n\n"
+        "New evryquiktool Contact Form Submission\n\n"
         f"Submitted: {ts}\n"
         f"From: {user_email}\n\n"
-        f"Missing tool request:\n{missing_tool or '—'}\n\n"
-        f"Issue report:\n{broken_tool or '—'}\n"
+        "Missing tool request:\n"
+        f"{missing_tool_disp}\n\n"
+        "Issue report:\n"
+        f"{broken_tool_disp}\n"
     )
 
     html_body = f"""
     <html>
       <body style="font-family:Arial,Helvetica,sans-serif; line-height:1.6; color:#222;">
-        <h2 style="color:#2c3e50;margin:0 0 12px;">New Contact Form Message</h2>
         <div style="font-size:12px;color:#777;margin-bottom:12px;">Submitted: {ts}</div>
         <table style="border-collapse:collapse; width:100%; max-width:640px;">
           <tr>
@@ -350,11 +359,11 @@ def build_email(user_email: str, missing_tool: str, broken_tool: str) -> tuple[s
           </tr>
           <tr>
             <td style="padding:8px; font-weight:600; background:#fafafa;">Missing Tool Request</td>
-            <td style="padding:8px;">{(missing_tool or '—').replace('\n','<br/>')}</td>
+            <td style="padding:8px;">{missing_tool_html}</td>
           </tr>
           <tr>
             <td style="padding:8px; font-weight:600; background:#fafafa;">Issue Report</td>
-            <td style="padding:8px;">{(broken_tool or '—').replace('\n','<br/>')}</td>
+            <td style="padding:8px;">{broken_tool_html}</td>
           </tr>
         </table>
         <p style="margin-top:18px; font-size:13px; color:#555;">
