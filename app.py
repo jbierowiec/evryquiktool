@@ -3,19 +3,15 @@ from __future__ import annotations
 import io
 import os
 import re
-import ssl
 import math
 import time
 import uuid
 import fitz
-import json
 import shlex
 import base64
 import pikepdf
 import img2pdf
-import smtplib
 import zipfile
-import requests
 import subprocess
 import numpy as np
 import shutil as _shutil
@@ -27,8 +23,6 @@ from yt_dlp import YoutubeDL
 from datetime import datetime
 from urllib.parse import urlparse, quote, unquote
 from yt_dlp.utils import DownloadError
-from email.message import EmailMessage
-from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Optional, List, Tuple
 from shutil import which as sh_which
 from werkzeug.utils import secure_filename
@@ -42,9 +36,6 @@ from flask import (
     Flask, jsonify, render_template, request, redirect, url_for,
     send_from_directory, send_file, flash, Blueprint, current_app, abort
 )
-
-from dotenv import load_dotenv
-load_dotenv()
 
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/.cache")
 
@@ -292,69 +283,6 @@ def pil_force_rgb(img: Image.Image) -> Image.Image:
 @app.route("/")
 def landing():
     return render_template("landing.html")
-
-
-# -----------------------------
-# Email / SMTP configuration
-# -----------------------------
-# --- Google Sheets config from env ---
-GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
-GOOGLE_SHEET_TAB = os.environ.get("GOOGLE_SHEET_TAB", "Sheet1")
-
-def is_valid_email(addr: str) -> bool:
-    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
-
-def append_to_sheet(email: str, title: str, message: str) -> None:
-    """Append one row to the configured Google Sheet."""
-    if not (GOOGLE_CREDENTIALS_JSON and GOOGLE_SHEET_ID):
-        raise RuntimeError("Missing GOOGLE_CREDENTIALS_JSON or GOOGLE_SHEET_ID")
-
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    gc = gspread.authorize(creds)
-
-    sh = gc.open_by_key(GOOGLE_SHEET_ID)
-    ws = sh.worksheet(GOOGLE_SHEET_TAB) if GOOGLE_SHEET_TAB else sh.sheet1
-
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    ws.append_row([ts, email, title, message], value_input_option="RAW")
-
-def back_to_contact(ok: bool):
-    return redirect(f"/?sent={'1' if ok else '0'}#contact")
-
-
-# -------------------------
-# Contact Form
-# -------------------------
-@app.post("/contact")
-def contact():
-    # Spam honeypot
-    if request.form.get("company"):
-        return back_to_contact(True)
-
-    user_email = (request.form.get("email") or "").strip()
-    title = (request.form.get("title") or "").strip()
-    message = (request.form.get("message") or "").strip()
-
-    if not (user_email and title and message and is_valid_email(user_email)):
-        print("[CONTACT] validation failed")
-        return back_to_contact(False)
-
-    try:
-        append_to_sheet(user_email, title, message)
-        return back_to_contact(True)
-    except Exception as e:
-        print(f"[SHEETS] append failed: {e}")
-        return back_to_contact(False)
-
-@app.get("/healthz")
-def healthz():
-    return "ok", 200
 
 
 # -------------------------
