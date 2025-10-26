@@ -297,161 +297,64 @@ def landing():
 # -----------------------------
 # Email / SMTP configuration
 # -----------------------------
-MAIL_WORKERS = int(os.environ.get("MAIL_WORKERS", "2"))
-executor = ThreadPoolExecutor(max_workers=MAIL_WORKERS)
-
-# ----- SMTP config (set in Railway Variables) -----
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
-EMAIL_TO   = os.environ.get("EMAIL_TO")
-SMTP_TIMEOUT = int(os.environ.get("SMTP_TIMEOUT", "10"))
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+# --- Google Sheets config from env ---
+GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
+GOOGLE_SHEET_TAB = os.environ.get("GOOGLE_SHEET_TAB", "Sheet1")
 
 def is_valid_email(addr: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", addr or ""))
 
-def boot_log():
-    redacted_user = (SMTP_USERNAME or "")[:2] + "***" if SMTP_USERNAME else None
-    print("[EMAIL-CONFIG] ",
-          json.dumps({
-              "SMTP_HOST": SMTP_HOST,
-              "SMTP_PORT": SMTP_PORT,
-              "SMTP_USERNAME": redacted_user,
-              "EMAIL_FROM": EMAIL_FROM,
-              "EMAIL_TO": EMAIL_TO,
-              "SMTP_TIMEOUT": SMTP_TIMEOUT,
-          }, ensure_ascii=False))
+def append_to_sheet(email: str, title: str, message: str) -> None:
+    """Append one row to the configured Google Sheet."""
+    if not (GOOGLE_CREDENTIALS_JSON and GOOGLE_SHEET_ID):
+        raise RuntimeError("Missing GOOGLE_CREDENTIALS_JSON or GOOGLE_SHEET_ID")
 
-boot_log()
+    import gspread
+    from google.oauth2.service_account import Credentials
 
-def build_email(user_email: str, missing_tool: str, broken_tool: str) -> tuple[str, str, str]:
-    """Return (subject, text_body, html_body)."""
-    from datetime import datetime
+    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(creds)
 
-    subject = "New evryquiktool Contact Form Submission"
+    sh = gc.open_by_key(GOOGLE_SHEET_ID)
+    ws = sh.worksheet(GOOGLE_SHEET_TAB) if GOOGLE_SHEET_TAB else sh.sheet1
+
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    ws.append_row([ts, email, title, message], value_input_option="RAW")
 
-    # Precompute sanitized values (avoid backslashes inside f-string expressions)
-    missing_tool_disp = (missing_tool or "—")
-    broken_tool_disp  = (broken_tool or "—")
-    missing_tool_html = missing_tool_disp.replace("\n", "<br/>")
-    broken_tool_html  = broken_tool_disp.replace("\n", "<br/>")
-
-    text_body = (
-        "New evryquiktool Contact Form Submission\n\n"
-        f"Submitted: {ts}\n"
-        f"From: {user_email}\n\n"
-        "Missing tool request:\n"
-        f"{missing_tool_disp}\n\n"
-        "Issue report:\n"
-        f"{broken_tool_disp}\n"
-    )
-
-    html_body = f"""
-    <html>
-      <body style="font-family:Arial,Helvetica,sans-serif; line-height:1.6; color:#222;">
-        <div style="font-size:12px;color:#777;margin-bottom:12px;">Submitted: {ts}</div>
-        <table style="border-collapse:collapse; width:100%; max-width:640px;">
-          <tr>
-            <td style="padding:8px; font-weight:600; width:180px; background:#fafafa;">From</td>
-            <td style="padding:8px;"><a href="mailto:{user_email}">{user_email}</a></td>
-          </tr>
-          <tr>
-            <td style="padding:8px; font-weight:600; background:#fafafa;">Missing Tool Request</td>
-            <td style="padding:8px;">{missing_tool_html}</td>
-          </tr>
-          <tr>
-            <td style="padding:8px; font-weight:600; background:#fafafa;">Issue Report</td>
-            <td style="padding:8px;">{broken_tool_html}</td>
-          </tr>
-        </table>
-        <p style="margin-top:18px; font-size:13px; color:#555;">
-          <em>Sent via the <strong>evryquiktool</strong> contact form.</em>
-        </p>
-      </body>
-    </html>
-    """
-    return subject, text_body, html_body
-
-def send_via_smtp(subject: str, text_body: str, html_body: str, reply_to: str) -> None:
-    """Raise on failure."""
-    if not all([SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
-        raise RuntimeError("SMTP env not fully set")
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    msg["Reply-To"] = reply_to
-    msg.set_content(text_body)
-    msg.add_alternative(html_body, subtype="html")
-
-    print("[SMTP] connecting…")
-    if SMTP_PORT == 465:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT, context=context) as s:
-            s.login(SMTP_USERNAME, SMTP_PASSWORD)
-            s.send_message(msg)
-    else:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as s:
-            s.ehlo()
-            s.starttls(context=ssl.create_default_context())
-            s.ehlo()
-            s.login(SMTP_USERNAME, SMTP_PASSWORD)
-            s.send_message(msg)
-    print("[SMTP] delivered ✔")
-
-def send_via_resend(subject: str, text_body: str, html_body: str, reply_to: str) -> None:
-    if not all([RESEND_API_KEY, EMAIL_FROM, EMAIL_TO]):
-        raise RuntimeError("Resend vars not set: RESEND_API_KEY, EMAIL_FROM, EMAIL_TO")
-    print("[RESEND] sending…")
-    r = requests.post(
-        "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-        json={
-            "from": EMAIL_FROM,          # must be a verified sender/domain in Resend
-            "to": [EMAIL_TO],
-            "subject": subject,
-            "html": html_body,
-            "text": text_body,
-            "reply_to": reply_to,
-        },
-        timeout=10,
-    )
-    if r.status_code >= 300:
-        raise RuntimeError(f"Resend error {r.status_code}: {r.text}")
-    print("[RESEND] accepted ✔")
+def back_to_contact(ok: bool):
+    return redirect(f"/?sent={'1' if ok else '0'}#contact")
 
 
 # -------------------------
 # Contact Form
 # -------------------------
-def back_to_contact(ok: bool):
-    return redirect(f"/?sent={'1' if ok else '0'}#contact")
-
 @app.post("/contact")
 def contact():
-    if request.form.get("company"):  # honeypot
+    # Spam honeypot
+    if request.form.get("company"):
         return back_to_contact(True)
 
     user_email = (request.form.get("email") or "").strip()
-    missing_tool = (request.form.get("missing_tool") or "").strip()
-    broken_tool  = (request.form.get("broken_tool") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    message = (request.form.get("message") or "").strip()
 
-    if not (user_email and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", user_email) and (missing_tool or broken_tool)):
+    if not (user_email and title and message and is_valid_email(user_email)):
         print("[CONTACT] validation failed")
         return back_to_contact(False)
 
-    subject, text_body, html_body = build_email(user_email, missing_tool, broken_tool)
-
     try:
-        send_via_resend(subject, text_body, html_body, user_email)
+        append_to_sheet(user_email, title, message)
         return back_to_contact(True)
     except Exception as e:
-        print(f"[RESEND] failed: {e}")
+        print(f"[SHEETS] append failed: {e}")
         return back_to_contact(False)
+
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
 
 
 # -------------------------

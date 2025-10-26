@@ -474,7 +474,7 @@
               action="{{ url_for('contact') }}"
               novalidate
             >
-              <!-- Honeypot: should stay empty -->
+              <!-- Honeypot -->
               <input
                 type="text"
                 name="company"
@@ -482,30 +482,6 @@
                 tabindex="-1"
                 autocomplete="off"
               />
-
-              <div class="col-12">
-                <label class="form-label">Want a tool you don't see?</label>
-                <input
-                  type="text"
-                  class="form-control"
-                  name="missing_tool"
-                  placeholder="Describe the tool you'd like"
-                  required
-                />
-              </div>
-
-              <div class="col-12">
-                <label class="form-label"
-                  >Is a tool broken? Reach out to us here.</label
-                >
-                <textarea
-                  class="form-control"
-                  name="broken_tool"
-                  rows="4"
-                  placeholder="Tell us what went wrong (or say N/A)"
-                  required
-                ></textarea>
-              </div>
 
               <div class="col-12 col-md-6">
                 <label class="form-label">Your email</label>
@@ -519,10 +495,31 @@
               </div>
 
               <div class="col-12">
+                <label class="form-label">Title</label>
+                <input
+                  type="text"
+                  class="form-control"
+                  name="title"
+                  placeholder="Subject/title..."
+                  required
+                />
+              </div>
+
+              <div class="col-12">
+                <label class="form-label">Message</label>
+                <textarea
+                  class="form-control"
+                  name="message"
+                  rows="5"
+                  placeholder="Write your message..."
+                  required
+                ></textarea>
+              </div>
+
+              <div class="col-12">
                 <button class="btn btn-primary" type="submit">Send</button>
               </div>
 
-              <!-- Inline alert area (filled by JS based on query params) -->
               <div class="col-12">
                 <div id="contactAlert" class="alert d-none" role="alert"></div>
               </div>
